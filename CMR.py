@@ -6,7 +6,6 @@ import datetime
 st.set_page_config(page_title="Gestão de Licenças", layout="wide")
 
 # --- Conexão com Supabase ---
-# O Streamlit buscará essas chaves na configuração de Secrets da nuvem
 @st.cache_resource
 def init_connection():
     url = st.secrets["SUPABASE_URL"]
@@ -17,62 +16,65 @@ supabase = init_connection()
 
 # --- Menu Lateral ---
 st.sidebar.title("Menu")
-opcao = st.sidebar.radio("Selecione a tela:", ["Cadastro", "Administração"])
+opcao = st.sidebar.radio("Selecione a tela:", ["Cadastro de Licença", "Administração"])
 
 # --- Tela 1: Cadastro ---
-if opcao == "Cadastro":
-    st.title("Cadastrar Novo Cliente")
+if opcao == "Cadastro de Licença":
+    st.title("Cadastrar Nova Licença")
     
     with st.form("form_cadastro"):
         col1, col2 = st.columns(2)
         with col1:
             cnpj = st.text_input("CNPJ (Apenas números)", max_chars=14)
-            vencimento = st.date_input("Data de Vencimento da Licença", min_value=datetime.date.today())
+            hwid = st.text_input("HWID (Identificador da Máquina)")
         with col2:
-            razao_social = st.text_input("Razão Social do Cliente")
-            licenca_ativa = st.checkbox("Ativar licença imediatamente?", value=True)
+            data_expiracao = st.date_input("Data de Expiração", min_value=datetime.date.today())
+            ativa = st.checkbox("Ativar licença imediatamente?", value=True)
             
-        submit = st.form_submit_button("Salvar Cliente")
+        submit = st.form_submit_button("Salvar Licença")
         
         if submit:
             if not cnpj.isdigit() or len(cnpj) != 14:
                 st.error("Por favor, insira um CNPJ válido com 14 números.")
-            elif not razao_social:
-                st.error("A Razão Social é obrigatória.")
+            elif not hwid:
+                st.error("O HWID é obrigatório para vincular a licença à máquina.")
             else:
                 try:
-                    novo_cliente = {
+                    nova_licenca = {
                         "cnpj": cnpj,
-                        "razao_social": razao_social,
-                        "vencimento": str(vencimento),
-                        "licenca_ativa": licenca_ativa
+                        "hwid": hwid,
+                        "data_expiracao": str(data_expiracao),
+                        "ativa": ativa
                     }
-                    supabase.table("clientes").insert(novo_cliente).execute()
-                    st.success(f"Cliente {razao_social} cadastrado com sucesso!")
+                    supabase.table("licencas").insert(nova_licenca).execute()
+                    st.success(f"Licença para o CNPJ {cnpj} cadastrada com sucesso!")
                 except Exception as e:
-                    st.error(f"Erro ao salvar: O CNPJ já existe ou houve falha de conexão. Detalhes: {e}")
+                    st.error(f"Erro ao salvar no banco de dados. Detalhes: {e}")
 
 # --- Tela 2: Administração ---
 elif opcao == "Administração":
     st.title("Administração de Licenças")
     
-    # Busca os dados no Supabase
+    # Busca os dados na tabela 'licencas'
     try:
-        resposta = supabase.table("clientes").select("*").execute()
-        dados_clientes = resposta.data
+        # Usamos order('id') para manter a tabela organizada
+        resposta = supabase.table("licencas").select("*").order("id").execute()
+        dados_licencas = resposta.data
         
-        if not dados_clientes:
-            st.info("Nenhum cliente cadastrado ainda.")
+        if not dados_licencas:
+            st.info("Nenhuma licença cadastrada ainda.")
         else:
             # Exibe os dados em uma tabela interativa
-            st.subheader("Clientes Cadastrados")
+            st.subheader("Licenças Atuais")
             st.dataframe(
-                dados_clientes,
+                dados_licencas,
                 column_config={
+                    "id": "ID",
                     "cnpj": "CNPJ",
-                    "razao_social": "Razão Social",
-                    "vencimento": st.column_config.DateColumn("Vencimento", format="DD/MM/YYYY"),
-                    "licenca_ativa": st.column_config.CheckboxColumn("Licença Ativa?")
+                    "hwid": "HWID",
+                    "data_expiracao": st.column_config.DateColumn("Expiração", format="DD/MM/YYYY"),
+                    "ativa": st.column_config.CheckboxColumn("Ativa?"),
+                    "created_at": st.column_config.DatetimeColumn("Criada em", format="DD/MM/YYYY HH:mm")
                 },
                 hide_index=True,
                 use_container_width=True
@@ -84,12 +86,12 @@ elif opcao == "Administração":
             st.subheader("Alterar Status da Licença")
             col_a, col_b, col_c = st.columns([2, 2, 1])
             
-            # Cria lista de CNPJs para o SelectBox
-            lista_cnpjs = [f"{c['cnpj']} - {c['razao_social']}" for c in dados_clientes]
+            # Cria lista usando o ID da licença (para o caso de um cliente ter mais de uma)
+            lista_licencas = [f"{c['id']} - CNPJ: {c['cnpj']}" for c in dados_licencas]
             
             with col_a:
-                selecao = st.selectbox("Selecione o Cliente:", lista_cnpjs)
-                cnpj_selecionado = selecao.split(" - ")[0] if selecao else None
+                selecao = st.selectbox("Selecione a Licença (pelo ID):", lista_licencas)
+                id_selecionado = selecao.split(" - ")[0] if selecao else None
                 
             with col_b:
                 novo_status = st.radio("Definir Licença como:", ["Ativa", "Inativa"], horizontal=True)
@@ -99,8 +101,8 @@ elif opcao == "Administração":
                 st.write("")
                 if st.button("Atualizar Status", type="primary"):
                     status_bool = True if novo_status == "Ativa" else False
-                    supabase.table("clientes").update({"licenca_ativa": status_bool}).eq("cnpj", cnpj_selecionado).execute()
-                    st.success("Status atualizado! Recarregue a página para ver na tabela.")
+                    supabase.table("licencas").update({"ativa": status_bool}).eq("id", id_selecionado).execute()
+                    st.success("Status atualizado! Recarregue a página para ver a mudança na tabela.")
                     
     except Exception as e:
         st.error(f"Erro ao buscar dados do Supabase: {e}")
