@@ -114,16 +114,18 @@ with aba_admin:
     if not dados_licencas:
         st.info("Nenhuma licença cadastrada ainda.")
     else:
-        # Tabela principal
+        # Tabela principal atualizada com os novos campos
         st.dataframe(
             dados_licencas,
             column_config={
                 "id": "ID",
                 "cnpj": "CNPJ",
                 "hwid": "HWID",
+                "nome_maquina": "Computador",
+                "ultima_validacao": st.column_config.DatetimeColumn("Última Validação", format="DD/MM/YYYY HH:mm"),
                 "data_expiracao": st.column_config.DateColumn("Expiração", format="DD/MM/YYYY"),
                 "ativa": st.column_config.CheckboxColumn("Ativa?"),
-                "created_at": st.column_config.DatetimeColumn("Criada em", format="DD/MM/YYYY HH:mm")
+                "created_at": None # Oculta a data de criação para não poluir a tela
             },
             hide_index=True,
             use_container_width=True
@@ -152,4 +154,4 @@ with aba_admin:
                     status_bool = True if novo_status == "Ativa" else False
                     supabase.table("licencas").update({"ativa": status_bool}).eq("id", id_selecionado).execute()
                     st.success("✅ Status atualizado!")
-                    st.rerun() # Recarrega a página automaticamente para atualizar a tabela
+                    st.rerun()
