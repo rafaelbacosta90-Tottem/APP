@@ -47,10 +47,16 @@ st.sidebar.button("Sair / Logout", on_click=realizar_logout, type="primary", use
 st.title("Gestão de Licenças de Software")
 st.markdown("---")
 
-# Abas de navegação principal
-aba_dashboard, aba_cadastro, aba_admin = st.tabs(["📊 Dashboard", "➕ Nova Licença", "⚙️ Administração"])
+# Abas de navegação principal atualizadas com as novas melhorias
+aba_dashboard, aba_cadastro, aba_admin, aba_acessos, aba_versoes = st.tabs([
+    "📊 Dashboard", 
+    "➕ Nova Licença", 
+    "⚙️ Administração", 
+    "📡 Auditoria de Acessos", 
+    "🚀 Atualizações (OTA)"
+])
 
-# Busca todos os dados uma vez para usar nas abas
+# Busca todos os dados da tabela principal de licenças
 try:
     resposta = supabase.table("licencas").select("*").order("id").execute()
     dados_licencas = resposta.data
@@ -104,6 +110,7 @@ with aba_cadastro:
                     }
                     supabase.table("licencas").insert(nova_licenca).execute()
                     st.success(f"✅ Licença para o CNPJ {cnpj} cadastrada com sucesso!")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao salvar no banco de dados: {e}")
 
@@ -114,7 +121,6 @@ with aba_admin:
     if not dados_licencas:
         st.info("Nenhuma licença cadastrada ainda.")
     else:
-        # Tabela principal atualizada com os novos campos
         st.dataframe(
             dados_licencas,
             column_config={
@@ -125,15 +131,13 @@ with aba_admin:
                 "ultima_validacao": st.column_config.DatetimeColumn("Última Validação", format="DD/MM/YYYY HH:mm"),
                 "data_expiracao": st.column_config.DateColumn("Expiração", format="DD/MM/YYYY"),
                 "ativa": st.column_config.CheckboxColumn("Ativa?"),
-                "created_at": None # Oculta a data de criação para não poluir a tela
+                "created_at": None 
             },
             hide_index=True,
             use_container_width=True
         )
         
         st.divider()
-        
-        # Área de edição e bloqueio
         st.subheader("Alterar Status / Bloquear Acesso")
         
         lista_licencas = [f"{c['id']} - CNPJ: {c['cnpj']} (HWID: {c['hwid']})" for c in dados_licencas]
@@ -155,3 +159,67 @@ with aba_admin:
                     supabase.table("licencas").update({"ativa": status_bool}).eq("id", id_selecionado).execute()
                     st.success("✅ Status atualizado!")
                     st.rerun()
+
+# --- ABA 4: AUDITORIA DE ACESSOS (NOVA) ---
+with aba_acessos:
+    st.subheader("📡 Logs de Máquinas e Versões")
+    st.markdown("Verifique em tempo real quem está a utilizar o sistema, em qual computador e qual a versão instalada.")
+    
+    if st.button("🔄 Atualizar Logs", key="btn_logs"):
+        st.rerun()
+        
+    try:
+        resposta_acessos = supabase.table("acessos_clientes").select("*").order("data_ultimo_acesso", desc=True).execute()
+        if resposta_acessos.data:
+            df_acessos = pd.DataFrame(resposta_acessos.data)
+            
+            # Organiza as colunas de forma legível
+            colunas_ordem = ["cnpj", "maquina", "versao_atual", "data_ultimo_acesso"]
+            df_acessos = df_acessos[[c for c in colunas_ordem if c in df_acessos.columns]]
+            
+            st.dataframe(
+                df_acessos,
+                column_config={
+                    "cnpj": "CNPJ da Empresa",
+                    "maquina": "Nome do Computador",
+                    "versao_atual": "Versão do Sistema",
+                    "data_ultimo_acesso": st.column_config.DatetimeColumn("Último Acesso", format="DD/MM/YYYY HH:mm:ss")
+                },
+                use_container_width=True, 
+                hide_index=True
+            )
+        else:
+            st.info("Nenhum cliente acessou o sistema ainda para gerar os logs de versão.")
+    except Exception as e:
+         st.error(f"Erro ao carregar a tabela 'acessos_clientes': {e}")
+
+# --- ABA 5: ATUALIZAÇÕES OTA (NOVA) ---
+with aba_versoes:
+    st.subheader("🚀 Gerenciador de Atualizações (Over-The-Air)")
+    st.markdown("Defina qual é a versão mais recente do sistema e qual versão obriga os clientes antigos a atualizarem.")
+    
+    try:
+        resp_versao = supabase.table("controle_versoes").select("*").eq("id", 1).single().execute()
+        dados_v = resp_versao.data
+        
+        if dados_v:
+            with st.form("form_versoes"):
+                v_atual = st.text_input("Versão Atual (Mais Recente)", value=dados_v.get("versao_atual", ""))
+                v_minima = st.text_input("Versão Mínima Obrigatória (Bloqueia quem estiver abaixo)", value=dados_v.get("versao_minima_obrigatoria", ""))
+                url_down = st.text_input("Link de Download Direto do novo .exe", value=dados_v.get("url_download", ""))
+                
+                submit_versao = st.form_submit_button("Lançar Atualização na Nuvem", type="primary")
+                
+                if submit_versao:
+                    supabase.table("controle_versoes").update({
+                        "versao_atual": v_atual,
+                        "versao_minima_obrigatoria": v_minima,
+                        "url_download": url_down
+                    }).eq("id", 1).execute()
+                    
+                    st.success("✅ Atualização lançada com sucesso! O sistema dos clientes atualizará sozinho.")
+                    st.rerun()
+        else:
+            st.warning("Configuração de controle de versões (ID 1) não encontrada no Supabase.")
+    except Exception as e:
+        st.error(f"Erro ao aceder à tabela de versões: {e}")
