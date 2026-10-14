@@ -161,6 +161,7 @@ with aba_admin:
                     st.rerun()
 
 # --- ABA 4: AUDITORIA DE ACESSOS (NOVA) ---
+# --- ABA 4: AUDITORIA DE ACESSOS (NOVA) ---
 with aba_acessos:
     st.subheader("📡 Logs de Máquinas e Versões")
     st.markdown("Verifique em tempo real quem está a utilizar o sistema, em qual computador e qual a versão instalada.")
@@ -176,6 +177,9 @@ with aba_acessos:
             # Organiza as colunas de forma legível
             colunas_ordem = ["cnpj", "maquina", "versao_atual", "data_ultimo_acesso"]
             df_acessos = df_acessos[[c for c in colunas_ordem if c in df_acessos.columns]]
+            
+            # CORREÇÃO DE FUSO HORÁRIO (-3 Horas)
+            df_acessos["data_ultimo_acesso"] = pd.to_datetime(df_acessos["data_ultimo_acesso"]).dt.tz_localize(None) - pd.Timedelta(hours=3)
             
             st.dataframe(
                 df_acessos,
