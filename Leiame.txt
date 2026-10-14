@@ -1,0 +1,47 @@
+Resumo das Melhorias na Gestão de Licenças
+
+Segurança Offline Inquebrável (HMAC): Substituímos bibliotecas problemáticas (cryptography) pelo sistema de assinatura digital nativo do Python (HMAC + Base64). Se um utilizador mal-intencionado abrir o SQLite local e mudar a data de validade de 2024 para 2099, o seu programa deteta a fraude matematicamente, quebra a assinatura e bloqueia o acesso instantaneamente.
+
+Sistema de Auto-Atualização Invisível (OTA - Over The Air): O cliente nunca mais terá de desinstalar e reinstalar o sistema manualmente. O programa baixa o novo .exe em segundo plano e usa um "Script Morcego" (.bat) para se substituir a si mesmo.
+
+Bloqueio de Versões Obsoletas: Pode forçar atualizações. Se um cliente tentar usar uma versão que tem um bug antigo, o sistema recusa-se a abrir e atualiza-se sozinho.
+
+Auditoria de Máquinas e Acessos (Log na Nuvem): Sabe sempre quem está a usar o sistema, em qual computador e quando.
+
+Prevenção de Compartilhamento (HWID): A licença é amarrada ao Hardware ID da placa-mãe. O cliente não consegue pegar no .exe e no banco de dados ativado e passar para o computador do colega.
+
+🛠️ Como Administrar o Seu Painel de Controlo (Supabase)
+Toda a administração agora é feita diretamente no site do Supabase. No menu esquerdo, vá a Table Editor (Editor de Tabelas). Lá, terá as suas tabelas essenciais:
+
+1. Tabela licencas (Gestão de Vendas)
+É aqui que você manda prender e soltar.
+
+Para dar acesso a um cliente novo: Adicione uma nova linha, coloque o cnpj do cliente e a data_validade (ex: 2027-01-01).
+
+Para renovar: Basta alterar a data. O sistema do cliente vai validar online na próxima vez que ele abrir e atualizar o SQLite dele automaticamente.
+
+Para bloquear um mau pagador: Altere a data_validade para ontem (ex: 2000-01-01) ou apague a linha do CNPJ. O acesso será revogado.
+
+2. Tabela acessos_clientes (O seu "Big Brother")
+Esta tabela atualiza-se sozinha. Olhe para ela todos os dias para entender o comportamento dos seus clientes.
+
+Você verá a coluna maquina (ex: DESKTOP-FINANCEIRO).
+
+Verá a versao_atual de cada cliente (ex: 8.4).
+
+E verá o data_ultimo_acesso.
+
+Estratégia: Se vir que um cliente comprou, mas não abre o sistema há 3 semanas, pode ser uma oportunidade para a sua equipa de Suporte ligar para ele e perguntar se precisa de treino.
+
+3. Tabela controle_versoes (Para lançar atualizações)
+Sempre que você alterar o código no VS Code, compilar um novo Buscador.exe (ex: Versão 8.5) e fizer o upload dele para a internet (Google Drive com link direto, Dropbox, seu site, etc.), você vem a esta tabela.
+
+Mude a versao_atual para 8.5.
+
+Cole o url_download do novo .exe.
+
+Decisão de Negócio (versao_minima_obrigatoria):
+
+Se a mudança for pequena (só estética), deixe a versão mínima no 8.4. O cliente verá um aviso e pode escolher se quer atualizar.
+
+Se a versão 8.4 parou de funcionar porque o governo mudou o portal PNCP, mude a versao_minima_obrigatoria para 8.5. O sistema de todos os clientes vai congelar e atualizar à força.
