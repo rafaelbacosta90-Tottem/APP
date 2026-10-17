@@ -6,7 +6,6 @@ import pandas as pd
 # --- Configuração da Página ---
 st.set_page_config(page_title="Portal de Licenças", page_icon="🔒", layout="wide")
 
-# --- Sistema de Autenticação ---
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 
@@ -19,7 +18,6 @@ def realizar_login():
 def realizar_logout():
     st.session_state["autenticado"] = False
 
-# Tela de Login
 if not st.session_state["autenticado"]:
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
@@ -29,37 +27,27 @@ if not st.session_state["autenticado"]:
             st.text_input("Usuário", key="usuario")
             st.text_input("Senha", type="password", key="senha")
             st.form_submit_button("Entrar", on_click=realizar_login, use_container_width=True)
-    st.stop() # Interrompe a execução do resto do código se não estiver logado
+    st.stop() 
 
 # --- Conexão com Supabase ---
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 supabase = init_connection()
 
-# --- Interface Principal (Logado) ---
 st.sidebar.title("Bem-vindo(a)")
 st.sidebar.button("Sair / Logout", on_click=realizar_logout, type="primary", use_container_width=True)
 
-st.title("Gestão de Licenças de Software")
+st.title("Gestão de Licenças e IA")
 st.markdown("---")
 
-# Abas de navegação principal atualizadas com as novas melhorias
 aba_dashboard, aba_cadastro, aba_admin, aba_acessos, aba_versoes = st.tabs([
-    "📊 Dashboard", 
-    "➕ Nova Licença", 
-    "⚙️ Administração", 
-    "📡 Auditoria de Acessos", 
-    "🚀 Atualizações (OTA)"
+    "📊 Dashboard", "➕ Nova Licença", "⚙️ Administração", "📡 Auditoria de Acessos", "🚀 Sistema & IA"
 ])
 
-# Busca todos os dados da tabela principal de licenças
 try:
-    resposta = supabase.table("licencas").select("*").order("id").execute()
-    dados_licencas = resposta.data
+    dados_licencas = supabase.table("licencas").select("*").order("id").execute().data
 except Exception as e:
     st.error(f"Erro ao conectar com o banco de dados: {e}")
     dados_licencas = []
@@ -68,162 +56,105 @@ except Exception as e:
 with aba_dashboard:
     if dados_licencas:
         df = pd.DataFrame(dados_licencas)
-        total = len(df)
-        ativas = len(df[df["ativa"] == True])
-        inativas = total - ativas
-        
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total de Licenças", total)
-        col2.metric("Licenças Ativas", ativas, delta="Operacionais")
-        col3.metric("Licenças Inativas", inativas, delta="- Bloqueadas", delta_color="inverse")
-    else:
-        st.info("Nenhuma licença cadastrada para gerar os gráficos.")
+        col1.metric("Total de Licenças", len(df))
+        col2.metric("Licenças Ativas", len(df[df["ativa"] == True]), delta="Operacionais")
+        col3.metric("Licenças Inativas", len(df) - len(df[df["ativa"] == True]), delta="- Bloqueadas", delta_color="inverse")
 
 # --- ABA 2: CADASTRO ---
 with aba_cadastro:
     st.subheader("Registrar Novo Cliente/Máquina")
-    
     with st.form("form_cadastro", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             cnpj = st.text_input("CNPJ (Apenas números)", max_chars=14)
             hwid = st.text_input("HWID (Identificador da Máquina)")
+            limite_ia = st.number_input("Limite de Análises IA por Dia", min_value=1, max_value=500, value=10)
         with col2:
             data_expiracao = st.date_input("Data de Expiração", min_value=datetime.date.today())
             ativa = st.toggle("Ativar licença imediatamente?", value=True)
             
-        st.write("")
-        submit = st.form_submit_button("💾 Salvar Licença", type="primary")
-        
-        if submit:
-            if not cnpj.isdigit() or len(cnpj) != 14:
-                st.error("Por favor, insira um CNPJ válido com 14 números.")
-            elif not hwid:
-                st.error("O HWID é obrigatório para vincular a licença à máquina.")
+        if st.form_submit_button("💾 Salvar Licença", type="primary"):
+            if len(cnpj) != 14: st.error("CNPJ inválido.")
+            elif not hwid: st.error("HWID obrigatório.")
             else:
-                try:
-                    nova_licenca = {
-                        "cnpj": cnpj,
-                        "hwid": hwid,
-                        "data_expiracao": str(data_expiracao),
-                        "ativa": ativa
-                    }
-                    supabase.table("licencas").insert(nova_licenca).execute()
-                    st.success(f"✅ Licença para o CNPJ {cnpj} cadastrada com sucesso!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao salvar no banco de dados: {e}")
+                supabase.table("licencas").insert({
+                    "cnpj": cnpj, "hwid": hwid, "data_expiracao": str(data_expiracao), "ativa": ativa, "limite_ia_diario": limite_ia
+                }).execute()
+                st.success("✅ Licença cadastrada!")
+                st.rerun()
 
 # --- ABA 3: ADMINISTRAÇÃO ---
 with aba_admin:
     st.subheader("Lista e Edição de Licenças")
-    
-    if not dados_licencas:
-        st.info("Nenhuma licença cadastrada ainda.")
-    else:
+    if dados_licencas:
         st.dataframe(
             dados_licencas,
             column_config={
-                "id": "ID",
-                "cnpj": "CNPJ",
-                "hwid": "HWID",
-                "nome_maquina": "Computador",
-                "ultima_validacao": st.column_config.DatetimeColumn("Última Validação", format="DD/MM/YYYY HH:mm"),
+                "id": "ID", "cnpj": "CNPJ", "hwid": "HWID", "limite_ia_diario": "Limite IA/Dia",
                 "data_expiracao": st.column_config.DateColumn("Expiração", format="DD/MM/YYYY"),
-                "ativa": st.column_config.CheckboxColumn("Ativa?"),
-                "created_at": None 
-            },
-            hide_index=True,
-            use_container_width=True
+                "ativa": st.column_config.CheckboxColumn("Ativa?")
+            }, hide_index=True, use_container_width=True
         )
         
         st.divider()
-        st.subheader("Alterar Status / Bloquear Acesso")
-        
-        lista_licencas = [f"{c['id']} - CNPJ: {c['cnpj']} (HWID: {c['hwid']})" for c in dados_licencas]
+        st.subheader("Alterar Configurações do Cliente")
+        lista_licencas = [f"{c['id']} - CNPJ: {c['cnpj']}" for c in dados_licencas]
         
         with st.container(border=True):
-            col_a, col_b, col_c = st.columns([2, 2, 1])
-            
+            col_a, col_b, col_c = st.columns([2, 1, 1])
             with col_a:
-                selecao = st.selectbox("Selecione a Licença para alterar:", lista_licencas)
+                selecao = st.selectbox("Selecione a Licença:", lista_licencas)
                 id_selecionado = selecao.split(" - ")[0] if selecao else None
-                
             with col_b:
-                novo_status = st.radio("Novo Status da Licença:", ["Ativa", "Inativa"], horizontal=True)
-                
+                novo_status = st.radio("Status:", ["Ativa", "Inativa"], horizontal=True)
             with col_c:
-                st.write("")
-                if st.button("Aplicar Mudança", use_container_width=True):
-                    status_bool = True if novo_status == "Ativa" else False
-                    supabase.table("licencas").update({"ativa": status_bool}).eq("id", id_selecionado).execute()
-                    st.success("✅ Status atualizado!")
-                    st.rerun()
+                novo_limite = st.number_input("Novo Limite IA", min_value=1, value=10)
+                
+            if st.button("Aplicar Mudança", use_container_width=True):
+                supabase.table("licencas").update({"ativa": (novo_status == "Ativa"), "limite_ia_diario": novo_limite}).eq("id", id_selecionado).execute()
+                st.success("✅ Atualizado!")
+                st.rerun()
 
-# --- ABA 4: AUDITORIA DE ACESSOS (NOVA) ---
-# --- ABA 4: AUDITORIA DE ACESSOS (NOVA) ---
+# --- ABA 4: AUDITORIA DE ACESSOS ---
 with aba_acessos:
-    st.subheader("📡 Logs de Máquinas e Versões")
-    st.markdown("Verifique em tempo real quem está a utilizar o sistema, em qual computador e qual a versão instalada.")
-    
-    if st.button("🔄 Atualizar Logs", key="btn_logs"):
-        st.rerun()
+    st.subheader("📡 Logs de Máquinas e Consumo de IA")
+    if st.button("🔄 Atualizar Logs"): st.rerun()
         
-    try:
-        resposta_acessos = supabase.table("acessos_clientes").select("*").order("data_ultimo_acesso", desc=True).execute()
-        if resposta_acessos.data:
-            df_acessos = pd.DataFrame(resposta_acessos.data)
-            
-            # Organiza as colunas de forma legível
-            colunas_ordem = ["cnpj", "maquina", "versao_atual", "data_ultimo_acesso"]
-            df_acessos = df_acessos[[c for c in colunas_ordem if c in df_acessos.columns]]
-            
-            # CORREÇÃO DE FUSO HORÁRIO (-3 Horas)
-            df_acessos["data_ultimo_acesso"] = pd.to_datetime(df_acessos["data_ultimo_acesso"]).dt.tz_localize(None) - pd.Timedelta(hours=3)
-            
-            st.dataframe(
-                df_acessos,
-                column_config={
-                    "cnpj": "CNPJ da Empresa",
-                    "maquina": "Nome do Computador",
-                    "versao_atual": "Versão do Sistema",
-                    "data_ultimo_acesso": st.column_config.DatetimeColumn("Último Acesso", format="DD/MM/YYYY HH:mm:ss")
-                },
-                use_container_width=True, 
-                hide_index=True
-            )
-        else:
-            st.info("Nenhum cliente acessou o sistema ainda para gerar os logs de versão.")
-    except Exception as e:
-         st.error(f"Erro ao carregar a tabela 'acessos_clientes': {e}")
+    resp_acessos = supabase.table("acessos_clientes").select("*").order("data_ultimo_acesso", desc=True).execute()
+    if resp_acessos.data:
+        df_acessos = pd.DataFrame(resp_acessos.data)
+        colunas_ordem = ["cnpj", "maquina", "versao_atual", "usos_ia_hoje", "data_uso_ia", "data_ultimo_acesso"]
+        df_acessos = df_acessos[[c for c in colunas_ordem if c in df_acessos.columns]]
+        df_acessos["data_ultimo_acesso"] = pd.to_datetime(df_acessos["data_ultimo_acesso"]).dt.tz_localize(None) - pd.Timedelta(hours=3)
+        
+        st.dataframe(df_acessos, column_config={
+            "cnpj": "CNPJ", "maquina": "Computador", "versao_atual": "Versão", 
+            "usos_ia_hoje": "IA Usada Hoje", "data_uso_ia": "Data do Uso IA",
+            "data_ultimo_acesso": st.column_config.DatetimeColumn("Último Acesso App", format="DD/MM/YYYY HH:mm:ss")
+        }, use_container_width=True, hide_index=True)
 
-# --- ABA 5: ATUALIZAÇÕES OTA (NOVA) ---
+# --- ABA 5: VERSÕES E CHAVES DE IA ---
 with aba_versoes:
-    st.subheader("🚀 Gerenciador de Atualizações (Over-The-Air)")
-    st.markdown("Defina qual é a versão mais recente do sistema e qual versão obriga os clientes antigos a atualizarem.")
+    st.subheader("🚀 Gerenciador de Atualizações e Chaves de IA")
+    dados_v = supabase.table("controle_versoes").select("*").eq("id", 1).single().execute().data
     
-    try:
-        resp_versao = supabase.table("controle_versoes").select("*").eq("id", 1).single().execute()
-        dados_v = resp_versao.data
-        
-        if dados_v:
-            with st.form("form_versoes"):
-                v_atual = st.text_input("Versão Atual (Mais Recente)", value=dados_v.get("versao_atual", ""))
-                v_minima = st.text_input("Versão Mínima Obrigatória (Bloqueia quem estiver abaixo)", value=dados_v.get("versao_minima_obrigatoria", ""))
-                url_down = st.text_input("Link de Download Direto do novo .exe", value=dados_v.get("url_download", ""))
-                
-                submit_versao = st.form_submit_button("Lançar Atualização na Nuvem", type="primary")
-                
-                if submit_versao:
-                    supabase.table("controle_versoes").update({
-                        "versao_atual": v_atual,
-                        "versao_minima_obrigatoria": v_minima,
-                        "url_download": url_down
-                    }).eq("id", 1).execute()
-                    
-                    st.success("✅ Atualização lançada com sucesso! O sistema dos clientes atualizará sozinho.")
-                    st.rerun()
-        else:
-            st.warning("Configuração de controle de versões (ID 1) não encontrada no Supabase.")
-    except Exception as e:
-        st.error(f"Erro ao aceder à tabela de versões: {e}")
+    if dados_v:
+        with st.form("form_versoes"):
+            st.markdown("**Atualizações (OTA)**")
+            v_atual = st.text_input("Versão Atual (Mais Recente)", value=dados_v.get("versao_atual", ""))
+            v_minima = st.text_input("Versão Mínima Obrigatória", value=dados_v.get("versao_minima_obrigatoria", ""))
+            url_down = st.text_input("Link de Download Direto do .exe", value=dados_v.get("url_download", ""))
+            
+            st.markdown("---")
+            st.markdown("**Inteligência Artificial (Global)**")
+            c_dots = st.text_input("Chave API: DOTS (OpenRouter)", value=dados_v.get("chave_dots", ""), type="password")
+            c_gemini = st.text_input("Chave API: Google Gemini (Fallback)", value=dados_v.get("chave_gemini", ""), type="password")
+            
+            if st.form_submit_button("💾 Salvar Configurações na Nuvem", type="primary"):
+                supabase.table("controle_versoes").update({
+                    "versao_atual": v_atual, "versao_minima_obrigatoria": v_minima, "url_download": url_down,
+                    "chave_dots": c_dots, "chave_gemini": c_gemini
+                }).eq("id", 1).execute()
+                st.success("✅ Configurações e Chaves guardadas com segurança!")
+                st.rerun()
