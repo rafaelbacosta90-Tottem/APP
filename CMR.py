@@ -54,12 +54,45 @@ except Exception as e:
 
 # --- ABA 1: DASHBOARD ---
 with aba_dashboard:
+    st.subheader("Visão Geral do SaaS")
+    
+    # Busca a telemetria das máquinas
+    try:
+        resp_acessos = supabase.table("acessos_clientes").select("usos_ia_hoje, editais_baixados").execute()
+        dados_acessos = resp_acessos.data
+    except:
+        dados_acessos = []
+        
+    total_ia_hoje = 0
+    total_editais_rede = 0
+    
+    if dados_acessos:
+        df_acc = pd.DataFrame(dados_acessos)
+        if "usos_ia_hoje" in df_acc.columns:
+            total_ia_hoje = int(df_acc["usos_ia_hoje"].fillna(0).sum())
+        if "editais_baixados" in df_acc.columns:
+            total_editais_rede = int(df_acc["editais_baixados"].fillna(0).sum())
+
     if dados_licencas:
         df = pd.DataFrame(dados_licencas)
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total de Licenças", len(df))
-        col2.metric("Licenças Ativas", len(df[df["ativa"] == True]), delta="Operacionais")
-        col3.metric("Licenças Inativas", len(df) - len(df[df["ativa"] == True]), delta="- Bloqueadas", delta_color="inverse")
+        total_lic = len(df)
+        ativas = len(df[df["ativa"] == True])
+        inativas = total_lic - ativas
+        
+        st.markdown("#### 👥 Licenças e Clientes")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total de Licenças", total_lic)
+        c2.metric("Licenças Ativas", ativas, delta="Operacionais")
+        c3.metric("Licenças Inativas", inativas, delta="- Bloqueadas", delta_color="inverse")
+        
+        st.divider()
+        
+        st.markdown("#### 🚀 Engajamento e Consumo (Rede Global)")
+        c4, c5 = st.columns(2)
+        c4.metric("🤖 Análises com IA (Hoje)", total_ia_hoje, help="Quantidade total de editais lidos pela IA hoje, somando todos os seus clientes.")
+        c5.metric("📄 Editais Sincronizados", f"{total_editais_rede:,}".replace(",", "."), help="Volume total de editais guardados de forma automática nas máquinas dos clientes.")
+    else:
+        st.info("Nenhuma licença cadastrada para gerar os gráficos.")
 
 # --- ABA 2: CADASTRO ---
 with aba_cadastro:
@@ -124,13 +157,13 @@ with aba_acessos:
     resp_acessos = supabase.table("acessos_clientes").select("*").order("data_ultimo_acesso", desc=True).execute()
     if resp_acessos.data:
         df_acessos = pd.DataFrame(resp_acessos.data)
-        colunas_ordem = ["cnpj", "maquina", "versao_atual", "usos_ia_hoje", "data_uso_ia", "data_ultimo_acesso"]
+        colunas_ordem = ["cnpj", "maquina", "versao_atual", "usos_ia_hoje", "editais_baixados", "data_ultimo_acesso"]
         df_acessos = df_acessos[[c for c in colunas_ordem if c in df_acessos.columns]]
         df_acessos["data_ultimo_acesso"] = pd.to_datetime(df_acessos["data_ultimo_acesso"]).dt.tz_localize(None) - pd.Timedelta(hours=3)
         
         st.dataframe(df_acessos, column_config={
             "cnpj": "CNPJ", "maquina": "Computador", "versao_atual": "Versão", 
-            "usos_ia_hoje": "IA Usada Hoje", "data_uso_ia": "Data do Uso IA",
+            "usos_ia_hoje": "IA Usada Hoje", "editais_baixados": "Editais Processados",
             "data_ultimo_acesso": st.column_config.DatetimeColumn("Último Acesso App", format="DD/MM/YYYY HH:mm:ss")
         }, use_container_width=True, hide_index=True)
 
