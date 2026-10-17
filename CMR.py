@@ -74,7 +74,23 @@ with aba_dashboard:
 # ABA 2: GESTÃO DE CLIENTES
 # ==========================================
 with aba_clientes:
-    col_cad, col_lista = st.columns([1, 2])
+    st.subheader("🏢 Carteira de Clientes")
+    if not df_cli.empty:
+        st.dataframe(
+            df_cli,
+            column_config={
+                "cnpj": "CNPJ", "razao_social": "Razão Social", 
+                "contato_nome": "Contato", "telefone": "WhatsApp", "email": "E-mail",
+                "data_cadastro": st.column_config.DatetimeColumn("Cadastrado", format="DD/MM/YYYY")
+            }, hide_index=True, use_container_width=True
+        )
+    else:
+        st.info("Nenhum cliente cadastrado ainda.")
+
+    st.divider()
+
+    col_cad, col_edit = st.columns(2)
+    
     with col_cad:
         st.subheader("➕ Novo Cliente")
         with st.form("form_cliente", clear_on_submit=True):
@@ -82,17 +98,49 @@ with aba_clientes:
             razao_social = st.text_input("Razão Social / Nome Fantasia")
             contato_nome = st.text_input("Pessoa de Contato")
             telefone = st.text_input("WhatsApp (Ex: 5511999999999)")
-            if st.form_submit_button("💾 Salvar Cliente", type="primary"):
+            email = st.text_input("E-mail Financeiro/Suporte")
+            
+            if st.form_submit_button("💾 Salvar Novo Cliente", type="primary"):
                 if len(cnpj) != 14: st.error("CNPJ inválido.")
+                elif not razao_social: st.error("Razão Social é obrigatória.")
                 else:
-                    supabase.table("clientes").upsert({"cnpj": cnpj, "razao_social": razao_social, "contato_nome": contato_nome, "telefone": telefone}).execute()
-                    st.success("✅ Cliente salvo!")
-                    st.rerun()
-    with col_lista:
-        st.subheader("🏢 Carteira de Clientes")
-        if not df_cli.empty:
-            st.dataframe(df_cli, column_config={"cnpj": "CNPJ", "razao_social": "Razão Social", "telefone": "WhatsApp"}, hide_index=True, use_container_width=True)
-
+                    try:
+                        supabase.table("clientes").insert({
+                            "cnpj": cnpj, "razao_social": razao_social, 
+                            "contato_nome": contato_nome, "telefone": telefone, "email": email
+                        }).execute()
+                        st.success("✅ Cliente salvo com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro: Este CNPJ já pode estar cadastrado. ({e})")
+                        
+    with col_edit:
+        st.subheader("✏️ Editar Cliente")
+        if dados_clientes:
+            lista_clientes_edit = [f"{c['cnpj']} - {c.get('razao_social', 'Sem Nome')}" for c in dados_clientes]
+            cliente_escolha = st.selectbox("Selecione o Cliente:", [""] + lista_clientes_edit)
+            
+            if cliente_escolha:
+                cnpj_editar = cliente_escolha.split(" - ")[0]
+                cliente_atual = next((item for item in dados_clientes if item["cnpj"] == cnpj_editar), None)
+                
+                with st.form("form_editar_cliente"):
+                    novo_nome = st.text_input("Razão Social", value=cliente_atual.get("razao_social", ""))
+                    novo_contato = st.text_input("Pessoa de Contato", value=cliente_atual.get("contato_nome", ""))
+                    novo_tel = st.text_input("WhatsApp", value=cliente_atual.get("telefone", ""))
+                    novo_email = st.text_input("E-mail", value=cliente_atual.get("email", ""))
+                    
+                    if st.form_submit_button("💾 Atualizar Dados", type="primary"):
+                        supabase.table("clientes").update({
+                            "razao_social": novo_nome,
+                            "contato_nome": novo_contato,
+                            "telefone": novo_tel,
+                            "email": novo_email
+                        }).eq("cnpj", cnpj_editar).execute()
+                        st.success("✅ Cliente atualizado com sucesso!")
+                        st.rerun()
+        else:
+            st.info("Cadastre um cliente primeiro para poder editá-lo.")
 # ==========================================
 # ABA 3: GESTÃO DE FERRAMENTAS
 # ==========================================
@@ -273,3 +321,50 @@ with aba_versoes:
                     st.rerun()
     except Exception as e:
         st.error(f"Erro ao carregar configurações globais: {e}")
+        # ==========================================
+# ABA 7: AUDITORIA (LOGS E CONSUMO)
+# ==========================================
+with aba_acessos:
+    st.subheader("📡 Logs de Acesso, Máquinas e Consumo")
+    
+    if st.button("🔄 Atualizar Tabela de Logs"): 
+        st.rerun()
+        
+    try:
+        resp_acessos = supabase.table("acessos_clientes").select("*").order("data_ultimo_acesso", desc=True).execute()
+        
+        if resp_acessos.data:
+            df_acessos = pd.DataFrame(resp_acessos.data)
+            
+            # Cruza os logs com a tabela de Clientes para mostrar o nome da Empresa
+            if not df_cli.empty:
+                df_acessos = pd.merge(df_acessos, df_cli[['cnpj', 'razao_social']], on='cnpj', how='left')
+            else:
+                df_acessos['razao_social'] = "Desconhecido"
+            
+            # Organiza as colunas de forma lógica
+            colunas_ordem = ["cnpj", "razao_social", "maquina", "versao_atual", "usos_ia_hoje", "editais_baixados", "data_ultimo_acesso"]
+            df_acessos = df_acessos[[c for c in colunas_ordem if c in df_acessos.columns]]
+            
+            # Ajuste de Fuso Horário (UTC para horário local)
+            df_acessos["data_ultimo_acesso"] = pd.to_datetime(df_acessos["data_ultimo_acesso"]).dt.tz_localize(None) - pd.Timedelta(hours=3)
+            
+            st.dataframe(
+                df_acessos, 
+                column_config={
+                    "cnpj": "CNPJ", 
+                    "razao_social": "Cliente", 
+                    "maquina": "Computador (Identificador)", 
+                    "versao_atual": "Versão do App", 
+                    "usos_ia_hoje": "Análises IA (Hoje)", 
+                    "editais_baixados": "Editais Sincronizados",
+                    "data_ultimo_acesso": st.column_config.DatetimeColumn("Último Acesso / Ping", format="DD/MM/YYYY HH:mm:ss")
+                }, 
+                use_container_width=True, 
+                hide_index=True
+            )
+        else:
+            st.info("Nenhum log de acesso registado pelas máquinas ainda.")
+            
+    except Exception as e:
+        st.error(f"Erro ao processar os logs de auditoria: {e}")
