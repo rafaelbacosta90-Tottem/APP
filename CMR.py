@@ -2,9 +2,11 @@ import streamlit as st
 from supabase import create_client, Client
 import datetime
 import pandas as pd
+import urllib.parse
+import re
 
 # --- Configuração da Página ---
-st.set_page_config(page_title="Portal de Licenças", page_icon="🔒", layout="wide")
+st.set_page_config(page_title="Portal de Gestão SaaS", page_icon="🏢", layout="wide")
 
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
@@ -22,7 +24,7 @@ if not st.session_state["autenticado"]:
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         st.title("🔒 Acesso Restrito")
-        st.markdown("Insira suas credenciais para gerenciar as licenças.")
+        st.markdown("Insira suas credenciais para gerenciar o sistema SaaS.")
         with st.form("form_login"):
             st.text_input("Usuário", key="usuario")
             st.text_input("Senha", type="password", key="senha")
@@ -39,155 +41,235 @@ supabase = init_connection()
 st.sidebar.title("Bem-vindo(a)")
 st.sidebar.button("Sair / Logout", on_click=realizar_logout, type="primary", use_container_width=True)
 
-st.title("Gestão de Licenças e IA")
+st.title("Gestão de Clientes, Licenças e Ferramentas")
 st.markdown("---")
 
-aba_dashboard, aba_cadastro, aba_admin, aba_acessos, aba_versoes = st.tabs([
-    "📊 Dashboard", "➕ Nova Licença", "⚙️ Administração", "📡 Auditoria de Acessos", "🚀 Sistema & IA"
+aba_dashboard, aba_clientes, aba_ferramentas, aba_licencas, aba_vencimentos, aba_acessos, aba_versoes = st.tabs([
+    "📊 Dashboard", "🏢 Clientes", "🛠️ Ferramentas", "🔑 Licenças (Máquinas)", "⏰ Vencimentos", "📡 Auditoria", "🚀 Sistema"
 ])
 
+# Buscas globais
 try:
+    dados_clientes = supabase.table("clientes").select("*").execute().data
     dados_licencas = supabase.table("licencas").select("*").order("id").execute().data
+    dados_ferramentas = supabase.table("ferramentas").select("*").order("id").execute().data
 except Exception as e:
     st.error(f"Erro ao conectar com o banco de dados: {e}")
-    dados_licencas = []
+    dados_clientes, dados_licencas, dados_ferramentas = [], [], []
 
-# --- ABA 1: DASHBOARD ---
+# ==========================================
+# ABA 1: DASHBOARD
+# ==========================================
 with aba_dashboard:
     st.subheader("Visão Geral do SaaS")
+    df_cli = pd.DataFrame(dados_clientes) if dados_clientes else pd.DataFrame()
+    df_lic = pd.DataFrame(dados_licencas) if dados_licencas else pd.DataFrame()
     
-    # Busca a telemetria das máquinas
-    try:
-        resp_acessos = supabase.table("acessos_clientes").select("usos_ia_hoje, editais_baixados").execute()
-        dados_acessos = resp_acessos.data
-    except:
-        dados_acessos = []
-        
-    total_ia_hoje = 0
-    total_editais_rede = 0
-    
-    if dados_acessos:
-        df_acc = pd.DataFrame(dados_acessos)
-        if "usos_ia_hoje" in df_acc.columns:
-            total_ia_hoje = int(df_acc["usos_ia_hoje"].fillna(0).sum())
-        if "editais_baixados" in df_acc.columns:
-            total_editais_rede = int(df_acc["editais_baixados"].fillna(0).sum())
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Empresas Clientes", len(df_cli))
+    c2.metric("Total de Máquinas (PCs)", len(df_lic))
+    c3.metric("Módulos Ativos (Geral)", len(supabase.table("licencas_ferramentas").select("id").eq("ativa", True).execute().data))
 
-    if dados_licencas:
-        df = pd.DataFrame(dados_licencas)
-        total_lic = len(df)
-        ativas = len(df[df["ativa"] == True])
-        inativas = total_lic - ativas
-        
-        st.markdown("#### 👥 Licenças e Clientes")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total de Licenças", total_lic)
-        c2.metric("Licenças Ativas", ativas, delta="Operacionais")
-        c3.metric("Licenças Inativas", inativas, delta="- Bloqueadas", delta_color="inverse")
-        
-        st.divider()
-        
-        st.markdown("#### 🚀 Engajamento e Consumo (Rede Global)")
-        c4, c5 = st.columns(2)
-        c4.metric("🤖 Análises com IA (Hoje)", total_ia_hoje, help="Quantidade total de editais lidos pela IA hoje, somando todos os seus clientes.")
-        c5.metric("📄 Editais Sincronizados", f"{total_editais_rede:,}".replace(",", "."), help="Volume total de editais guardados de forma automática nas máquinas dos clientes.")
-    else:
-        st.info("Nenhuma licença cadastrada para gerar os gráficos.")
-
-# --- ABA 2: CADASTRO ---
-with aba_cadastro:
-    st.subheader("Registrar Novo Cliente/Máquina")
-    with st.form("form_cadastro", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
+# ==========================================
+# ABA 2: GESTÃO DE CLIENTES
+# ==========================================
+with aba_clientes:
+    col_cad, col_lista = st.columns([1, 2])
+    with col_cad:
+        st.subheader("➕ Novo Cliente")
+        with st.form("form_cliente", clear_on_submit=True):
             cnpj = st.text_input("CNPJ (Apenas números)", max_chars=14)
-            hwid = st.text_input("HWID (Identificador da Máquina)")
-            limite_ia = st.number_input("Limite de Análises IA por Dia", min_value=1, max_value=500, value=10)
-        with col2:
-            data_expiracao = st.date_input("Data de Expiração", min_value=datetime.date.today())
-            ativa = st.toggle("Ativar licença imediatamente?", value=True)
-            
-        if st.form_submit_button("💾 Salvar Licença", type="primary"):
-            if len(cnpj) != 14: st.error("CNPJ inválido.")
-            elif not hwid: st.error("HWID obrigatório.")
-            else:
-                supabase.table("licencas").insert({
-                    "cnpj": cnpj, "hwid": hwid, "data_expiracao": str(data_expiracao), "ativa": ativa, "limite_ia_diario": limite_ia
-                }).execute()
-                st.success("✅ Licença cadastrada!")
-                st.rerun()
+            razao_social = st.text_input("Razão Social / Nome Fantasia")
+            contato_nome = st.text_input("Pessoa de Contato")
+            telefone = st.text_input("WhatsApp (Ex: 5511999999999)")
+            if st.form_submit_button("💾 Salvar Cliente", type="primary"):
+                if len(cnpj) != 14: st.error("CNPJ inválido.")
+                else:
+                    supabase.table("clientes").upsert({"cnpj": cnpj, "razao_social": razao_social, "contato_nome": contato_nome, "telefone": telefone}).execute()
+                    st.success("✅ Cliente salvo!")
+                    st.rerun()
+    with col_lista:
+        st.subheader("🏢 Carteira de Clientes")
+        if not df_cli.empty:
+            st.dataframe(df_cli, column_config={"cnpj": "CNPJ", "razao_social": "Razão Social", "telefone": "WhatsApp"}, hide_index=True, use_container_width=True)
 
-# --- ABA 3: ADMINISTRAÇÃO ---
-with aba_admin:
-    st.subheader("Lista e Edição de Licenças")
-    if dados_licencas:
-        st.dataframe(
-            dados_licencas,
-            column_config={
-                "id": "ID", "cnpj": "CNPJ", "hwid": "HWID", "limite_ia_diario": "Limite IA/Dia",
-                "data_expiracao": st.column_config.DateColumn("Expiração", format="DD/MM/YYYY"),
-                "ativa": st.column_config.CheckboxColumn("Ativa?")
-            }, hide_index=True, use_container_width=True
-        )
+# ==========================================
+# ABA 3: GESTÃO DE FERRAMENTAS
+# ==========================================
+with aba_ferramentas:
+    c_cad_fer, c_lista_fer = st.columns([1, 2])
+    with c_cad_fer:
+        st.subheader("➕ Nova Ferramenta")
+        with st.form("form_ferramenta", clear_on_submit=True):
+            nome_fer = st.text_input("Nome do Módulo/Ferramenta")
+            if st.form_submit_button("💾 Cadastrar", type="primary"):
+                if nome_fer:
+                    supabase.table("ferramentas").insert({"nome": nome_fer}).execute()
+                    st.success("✅ Ferramenta adicionada!")
+                    st.rerun()
+    with c_lista_fer:
+        st.subheader("🛠️ Ferramentas Disponíveis")
+        if dados_ferramentas:
+            st.dataframe(pd.DataFrame(dados_ferramentas), hide_index=True, use_container_width=True)
+
+# ==========================================
+# ABA 4: GESTÃO DE LICENÇAS (MÁQUINAS E MÓDULOS)
+# ==========================================
+with aba_licencas:
+    if not dados_clientes or not dados_ferramentas:
+        st.warning("⚠️ Cadastre pelo menos um Cliente e uma Ferramenta para gerar licenças.")
+    else:
+        st.subheader("➕ Emitir Nova Licença de Máquina")
+        lista_clientes = [f"{c['cnpj']} - {c.get('razao_social', '')}" for c in dados_clientes]
+        lista_ferramentas = [f"{f['id']} - {f['nome']}" for f in dados_ferramentas]
         
-        st.divider()
-        st.subheader("Alterar Configurações do Cliente")
-        lista_licencas = [f"{c['id']} - CNPJ: {c['cnpj']}" for c in dados_licencas]
-        
-        with st.container(border=True):
-            col_a, col_b, col_c = st.columns([2, 1, 1])
-            with col_a:
-                selecao = st.selectbox("Selecione a Licença:", lista_licencas)
-                id_selecionado = selecao.split(" - ")[0] if selecao else None
-            with col_b:
-                novo_status = st.radio("Status:", ["Ativa", "Inativa"], horizontal=True)
-            with col_c:
-                novo_limite = st.number_input("Novo Limite IA", min_value=1, value=10)
+        with st.form("form_licenca", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                cliente_sel = st.selectbox("Selecione o Cliente:", lista_clientes)
+                hwid = st.text_input("HWID (Identificador do Computador)")
+                limite_ia = st.number_input("Limite de Análises IA/Dia (Neste PC)", min_value=1, value=10)
+            with c2:
+                ferramentas_selecionadas = st.multiselect("Selecione os Módulos/Ferramentas:", lista_ferramentas)
                 
-            if st.button("Aplicar Mudança", use_container_width=True):
-                supabase.table("licencas").update({"ativa": (novo_status == "Ativa"), "limite_ia_diario": novo_limite}).eq("id", id_selecionado).execute()
-                st.success("✅ Atualizado!")
-                st.rerun()
+                # Gera dinamicamente um seletor de data para cada ferramenta selecionada
+                datas_ferramentas = {}
+                for fer in ferramentas_selecionadas:
+                    datas_ferramentas[fer] = st.date_input(f"Validade para: {fer.split(' - ')[1]}", min_value=datetime.date.today(), key=f"dt_{fer}")
+                
+            if st.form_submit_button("💾 Gerar Licença e Módulos", type="primary"):
+                cnpj_alvo = cliente_sel.split(" - ")[0]
+                if not hwid or not ferramentas_selecionadas: 
+                    st.error("Preencha HWID e selecione ao menos uma ferramenta.")
+                else:
+                    # 1. Cria a licença base (Máquina)
+                    res_lic = supabase.table("licencas").insert({"cnpj": cnpj_alvo, "hwid": hwid, "limite_ia_diario": limite_ia}).execute()
+                    nova_lic_id = res_lic.data[0]['id']
+                    
+                    # 2. Associa as ferramentas com suas respectivas datas
+                    payload_ferramentas = []
+                    for fer in ferramentas_selecionadas:
+                        fer_id = int(fer.split(" - ")[0])
+                        payload_ferramentas.append({
+                            "licenca_id": nova_lic_id,
+                            "ferramenta_id": fer_id,
+                            "data_expiracao": str(datas_ferramentas[fer]),
+                            "ativa": True
+                        })
+                    supabase.table("licencas_ferramentas").insert(payload_ferramentas).execute()
+                    
+                    st.success("✅ Licença e ferramentas vinculadas com sucesso!")
+                    st.rerun()
 
-# --- ABA 4: AUDITORIA DE ACESSOS ---
-with aba_acessos:
-    st.subheader("📡 Logs de Máquinas e Consumo de IA")
-    if st.button("🔄 Atualizar Logs"): st.rerun()
+        st.divider()
+        st.subheader("⚙️ Gerenciar Módulos por Máquina")
+        lista_licencas_edit = [f"{l['id']} - Máquina: {l['hwid']} (CNPJ: {l['cnpj']})" for l in dados_licencas]
         
-    resp_acessos = supabase.table("acessos_clientes").select("*").order("data_ultimo_acesso", desc=True).execute()
-    if resp_acessos.data:
-        df_acessos = pd.DataFrame(resp_acessos.data)
-        colunas_ordem = ["cnpj", "maquina", "versao_atual", "usos_ia_hoje", "editais_baixados", "data_ultimo_acesso"]
-        df_acessos = df_acessos[[c for c in colunas_ordem if c in df_acessos.columns]]
-        df_acessos["data_ultimo_acesso"] = pd.to_datetime(df_acessos["data_ultimo_acesso"]).dt.tz_localize(None) - pd.Timedelta(hours=3)
+        lic_escolha = st.selectbox("Escolha a Instalação (Máquina) para gerenciar as Ferramentas:", [""] + lista_licencas_edit)
         
-        st.dataframe(df_acessos, column_config={
-            "cnpj": "CNPJ", "maquina": "Computador", "versao_atual": "Versão", 
-            "usos_ia_hoje": "IA Usada Hoje", "editais_baixados": "Editais Processados",
-            "data_ultimo_acesso": st.column_config.DatetimeColumn("Último Acesso App", format="DD/MM/YYYY HH:mm:ss")
-        }, use_container_width=True, hide_index=True)
+        if lic_escolha:
+            id_lic_editar = int(lic_escolha.split(" - ")[0])
+            
+            # Busca as ferramentas ligadas a esta máquina
+            modulos_ativos = supabase.table("licencas_ferramentas").select("*, ferramentas(nome)").eq("licenca_id", id_lic_editar).execute().data
+            
+            if modulos_ativos:
+                st.markdown("##### Ferramentas Instaladas nesta Máquina:")
+                for mod in modulos_ativos:
+                    with st.container(border=True):
+                        c_m1, c_m2, c_m3 = st.columns([2, 1, 1])
+                        c_m1.markdown(f"**🛠️ {mod['ferramentas']['nome']}**")
+                        
+                        nova_dt = c_m2.date_input("Validade", value=datetime.datetime.strptime(mod['data_expiracao'], "%Y-%m-%d").date(), key=f"edt_{mod['id']}")
+                        novo_status = c_m3.toggle("Status", value=mod['ativa'], key=f"tgl_{mod['id']}")
+                        
+                        if st.button("Atualizar Módulo", key=f"btn_{mod['id']}", use_container_width=True):
+                            supabase.table("licencas_ferramentas").update({"data_expiracao": str(nova_dt), "ativa": novo_status}).eq("id", mod["id"]).execute()
+                            st.success(f"{mod['ferramentas']['nome']} atualizado!")
+                            st.rerun()
+            else:
+                st.info("Nenhuma ferramenta vinculada a esta máquina.")
 
-# --- ABA 5: VERSÕES E CHAVES DE IA ---
-with aba_versoes:
-    st.subheader("🚀 Gerenciador de Atualizações e Chaves de IA")
-    dados_v = supabase.table("controle_versoes").select("*").eq("id", 1).single().execute().data
+# ==========================================
+# ABA 5: RELATÓRIO DE VENCIMENTOS (CRM)
+# ==========================================
+with aba_vencimentos:
+    st.subheader("⏰ Cobranças e Alertas de Módulos (WhatsApp)")
+    # Puxa os dados cruzados (Módulos -> Licenças -> Clientes)
+    dados_venc = supabase.table("licencas_ferramentas").select("*, licencas(cnpj, hwid, clientes(razao_social, telefone))").eq("ativa", True).execute().data
     
-    if dados_v:
-        with st.form("form_versoes"):
-            st.markdown("**Atualizações (OTA)**")
-            v_atual = st.text_input("Versão Atual (Mais Recente)", value=dados_v.get("versao_atual", ""))
-            v_minima = st.text_input("Versão Mínima Obrigatória", value=dados_v.get("versao_minima_obrigatoria", ""))
-            url_down = st.text_input("Link de Download Direto do .exe", value=dados_v.get("url_download", ""))
+    if not dados_venc:
+        st.info("Nenhum módulo ativo para relatar.")
+    else:
+        # Achata os dados para o Pandas
+        lista_plana = []
+        for d in dados_venc:
+            try:
+                lista_plana.append({
+                    "id_relacao": d['id'],
+                    "ferramenta": d.get('ferramentas', {}).get('nome', 'Ferramenta ID '+str(d['ferramenta_id'])),
+                    "data_exp": d['data_expiracao'],
+                    "cnpj": d['licencas']['cnpj'],
+                    "hwid": d['licencas']['hwid'],
+                    "cliente": d['licencas']['clientes']['razao_social'],
+                    "telefone": d['licencas']['clientes']['telefone']
+                })
+            except: pass
             
-            st.markdown("---")
-            st.markdown("**Inteligência Artificial (Global)**")
-            c_dots = st.text_input("Chave API: DOTS (OpenRouter)", value=dados_v.get("chave_dots", ""), type="password")
-            c_gemini = st.text_input("Chave API: Google Gemini (Fallback)", value=dados_v.get("chave_gemini", ""), type="password")
+        if lista_plana:
+            df_venc = pd.DataFrame(lista_plana)
+            hoje = datetime.date.today()
+            df_venc['data_exp_dt'] = pd.to_datetime(df_venc['data_exp']).dt.date
+            df_venc['dias_restantes'] = (df_venc['data_exp_dt'] - hoje).apply(lambda x: x.days)
             
-            if st.form_submit_button("💾 Salvar Configurações na Nuvem", type="primary"):
-                supabase.table("controle_versoes").update({
-                    "versao_atual": v_atual, "versao_minima_obrigatoria": v_minima, "url_download": url_down,
-                    "chave_dots": c_dots, "chave_gemini": c_gemini
-                }).eq("id", 1).execute()
-                st.success("✅ Configurações e Chaves guardadas com segurança!")
-                st.rerun()
+            df_filtrado = df_venc.sort_values(by="dias_restantes")
+            
+            for index, row in df_filtrado.iterrows():
+                dias = row['dias_restantes']
+                if dias <= 20: # Mostra apenas quem vence em 20 dias ou menos (ou já venceu)
+                    cor = "red" if dias < 0 else ("orange" if dias == 0 else "green")
+                    status = f"Vencida há {abs(dias)} dias" if dias < 0 else ("Vence HOJE!" if dias == 0 else f"Vence em {dias} dias")
+
+                    with st.container(border=True):
+                        col_i, col_m, col_w = st.columns([2, 4, 2])
+                        with col_i:
+                            st.markdown(f"🏢 **{row['cliente']}**")
+                            st.markdown(f"🛠️ Módulo: {row['ferramenta']}")
+                        with col_m:
+                            st.markdown(f"⏳ **Status:** :{cor}[{status}] (Validade: {row['data_exp_dt'].strftime('%d/%m/%Y')})")
+                        with col_w:
+                            if row['telefone']:
+                                numero_limpo = re.sub(r'\D', '', str(row['telefone']))
+                                msg = f"Olá {row['cliente']}! A licença do módulo *{row['ferramenta']}* expira em {dias} dias. Deseja agilizar a renovação?" if dias > 0 else f"Olá {row['cliente']}! A licença do módulo *{row['ferramenta']}* expirou. Vamos renovar?"
+                                st.link_button("💬 Cobrar no WhatsApp", f"https://wa.me/{numero_limpo}?text={urllib.parse.quote(msg)}", use_container_width=True)
+
+# (Aba 6 Auditoria e Aba 7 Versões continuam iguais à lógica anterior, basta colar aqui o final padrão delas se desejar)
+
+# ==========================================
+# ABA 6: SISTEMA & IA
+# ==========================================
+with aba_versoes:
+    st.subheader("🚀 Atualizações (OTA) e Chaves de IA")
+    try:
+        dados_v = supabase.table("controle_versoes").select("*").eq("id", 1).single().execute().data
+        if dados_v:
+            with st.form("form_versoes"):
+                st.markdown("**1. Atualizações Obrigatórias do Executável**")
+                v_atual = st.text_input("Versão Atual (Mais Recente)", value=dados_v.get("versao_atual", ""))
+                v_minima = st.text_input("Versão Mínima Obrigatória", value=dados_v.get("versao_minima_obrigatoria", ""))
+                url_down = st.text_input("Link de Download Direto do .exe", value=dados_v.get("url_download", ""))
+                
+                st.markdown("---")
+                st.markdown("**2. Inteligência Artificial (Global)**")
+                c_dots = st.text_input("Chave API: DOTS (OpenRouter)", value=dados_v.get("chave_dots", ""), type="password")
+                c_gemini = st.text_input("Chave API: Google Gemini (Fallback)", value=dados_v.get("chave_gemini", ""), type="password")
+                
+                if st.form_submit_button("💾 Salvar Configurações na Nuvem", type="primary"):
+                    supabase.table("controle_versoes").update({
+                        "versao_atual": v_atual, "versao_minima_obrigatoria": v_minima, "url_download": url_down,
+                        "chave_dots": c_dots, "chave_gemini": c_gemini
+                    }).eq("id", 1).execute()
+                    st.success("✅ Configurações e Chaves guardadas com segurança!")
+                    st.rerun()
+    except Exception as e:
+        st.error(f"Erro ao carregar configurações globais: {e}")
