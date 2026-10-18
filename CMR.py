@@ -73,16 +73,37 @@ with aba_dashboard:
 # ==========================================
 # ABA 2: GESTÃO DE CLIENTES
 # ==========================================
+# ==========================================
+# ABA 2: GESTÃO DE CLIENTES (CRM)
+# ==========================================
 with aba_clientes:
-    st.subheader("🏢 Carteira de Clientes")
-    if not df_cli.empty:
+    st.subheader("🏢 Carteira de Clientes e Consumo")
+    
+    # 1. Puxa os dados de consumo e soma os editais por CNPJ
+    try:
+        acc_data = supabase.table("acessos_clientes").select("cnpj, editais_baixados").execute().data
+        if acc_data and not df_cli.empty:
+            df_soma = pd.DataFrame(acc_data).groupby("cnpj")["editais_baixados"].sum().reset_index()
+            df_cli_display = pd.merge(df_cli, df_soma, on="cnpj", how="left")
+            df_cli_display["editais_baixados"] = df_cli_display["editais_baixados"].fillna(0).astype(int)
+        else:
+            df_cli_display = df_cli.copy()
+            if not df_cli_display.empty: df_cli_display["editais_baixados"] = 0
+    except:
+        df_cli_display = df_cli.copy()
+        if not df_cli_display.empty: df_cli_display["editais_baixados"] = 0
+
+    # 2. Exibe a tabela com a nova coluna de métrica
+    if not df_cli_display.empty:
         st.dataframe(
-            df_cli,
+            df_cli_display,
             column_config={
                 "cnpj": "CNPJ", "razao_social": "Razão Social", 
                 "contato_nome": "Contato", "telefone": "WhatsApp", "email": "E-mail",
+                "editais_baixados": st.column_config.NumberColumn("Editais Baixados", help="Total de editais encontrados e processados por este cliente"),
                 "data_cadastro": st.column_config.DatetimeColumn("Cadastrado", format="DD/MM/YYYY")
-            }, hide_index=True, use_container_width=True
+            }, hide_index=True, use_container_width=True,
+            column_order=["cnpj", "razao_social", "contato_nome", "telefone", "editais_baixados", "data_cadastro"] # Organiza a ordem visual
         )
     else:
         st.info("Nenhum cliente cadastrado ainda.")
@@ -90,6 +111,8 @@ with aba_clientes:
     st.divider()
 
     col_cad, col_edit = st.columns(2)
+    
+    # (O restante do código das colunas de Novo Cliente e Editar Cliente continua igual abaixo)
     
     with col_cad:
         st.subheader("➕ Novo Cliente")
