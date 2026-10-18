@@ -239,30 +239,48 @@ with aba_licencas:
                 st.info("Nenhuma ferramenta vinculada a esta máquina.")
 
 # ==========================================
-# ABA 5: RELATÓRIO DE VENCIMENTOS (CRM)
+# ABA 4: RELATÓRIO DE VENCIMENTOS (CRM)
 # ==========================================
 with aba_vencimentos:
     st.subheader("⏰ Cobranças e Alertas de Módulos (WhatsApp)")
-    # Puxa os dados cruzados (Módulos -> Licenças -> Clientes)
-    dados_venc = supabase.table("licencas_ferramentas").select("*, licencas(cnpj, hwid, clientes(razao_social, telefone))").eq("ativa", True).execute().data
+    
+    # CORREÇÃO 1: Adicionado 'ferramentas(nome)' à pesquisa para trazer o nome real
+    dados_venc = supabase.table("licencas_ferramentas").select(
+        "*, ferramentas(nome), licencas(cnpj, hwid, clientes(razao_social, telefone))"
+    ).eq("ativa", True).execute().data
     
     if not dados_venc:
         st.info("Nenhum módulo ativo para relatar.")
     else:
-        # Achata os dados para o Pandas
+        # Achata os dados para o Pandas e trata os valores vazios
         lista_plana = []
         for d in dados_venc:
             try:
+                # Tenta puxar o nome da ferramenta
+                nome_fer = d.get('ferramentas', {}).get('nome') if d.get('ferramentas') else f"Ferramenta ID {d.get('ferramenta_id')}"
+                
+                # Previne o erro "nan" (Not a Number) se o cliente não tiver nome ou telefone
+                dados_cli = d.get('licencas', {}).get('clientes') or {}
+                cliente_nome = dados_cli.get('razao_social')
+                telefone_cli = dados_cli.get('telefone')
+                
+                if not cliente_nome or str(cliente_nome).lower() == 'nan':
+                    cliente_nome = f"Cliente (CNPJ: {d['licencas']['cnpj']})"
+                
+                if not telefone_cli or str(telefone_cli).lower() == 'nan':
+                    telefone_cli = ""
+
                 lista_plana.append({
                     "id_relacao": d['id'],
-                    "ferramenta": d.get('ferramentas', {}).get('nome', 'Ferramenta ID '+str(d['ferramenta_id'])),
+                    "ferramenta": nome_fer,
                     "data_exp": d['data_expiracao'],
                     "cnpj": d['licencas']['cnpj'],
                     "hwid": d['licencas']['hwid'],
-                    "cliente": d['licencas']['clientes']['razao_social'],
-                    "telefone": d['licencas']['clientes']['telefone']
+                    "cliente": cliente_nome,
+                    "telefone": telefone_cli
                 })
-            except: pass
+            except Exception as e: 
+                pass
             
         if lista_plana:
             df_venc = pd.DataFrame(lista_plana)
@@ -270,11 +288,13 @@ with aba_vencimentos:
             df_venc['data_exp_dt'] = pd.to_datetime(df_venc['data_exp']).dt.date
             df_venc['dias_restantes'] = (df_venc['data_exp_dt'] - hoje).apply(lambda x: x.days)
             
+            # Filtro para ver apenas as próximas a vencer (opcional)
             df_filtrado = df_venc.sort_values(by="dias_restantes")
             
             for index, row in df_filtrado.iterrows():
                 dias = row['dias_restantes']
-                if dias <= 20: # Mostra apenas quem vence em 20 dias ou menos (ou já venceu)
+                
+                if dias <= 20: # Mostra quem vence em 20 dias ou menos
                     cor = "red" if dias < 0 else ("orange" if dias == 0 else "green")
                     status = f"Vencida há {abs(dias)} dias" if dias < 0 else ("Vence HOJE!" if dias == 0 else f"Vence em {dias} dias")
 
@@ -290,8 +310,9 @@ with aba_vencimentos:
                                 numero_limpo = re.sub(r'\D', '', str(row['telefone']))
                                 msg = f"Olá {row['cliente']}! A licença do módulo *{row['ferramenta']}* expira em {dias} dias. Deseja agilizar a renovação?" if dias > 0 else f"Olá {row['cliente']}! A licença do módulo *{row['ferramenta']}* expirou. Vamos renovar?"
                                 st.link_button("💬 Cobrar no WhatsApp", f"https://wa.me/{numero_limpo}?text={urllib.parse.quote(msg)}", use_container_width=True)
+                            else:
+                                st.warning("⚠️ Cliente sem WhatsApp cadastrado")
 
-# (Aba 6 Auditoria e Aba 7 Versões continuam iguais à lógica anterior, basta colar aqui o final padrão delas se desejar)
 
 # ==========================================
 # ABA 6: SISTEMA & IA
