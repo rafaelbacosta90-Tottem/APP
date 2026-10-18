@@ -62,17 +62,54 @@ except Exception as e:
 # ==========================================
 with aba_dashboard:
     st.subheader("Visão Geral do SaaS")
+    
+    # 1. Puxa os dados atualizados da telemetria
+    try:
+        resp_acessos = supabase.table("acessos_clientes").select("usos_ia_hoje, editais_baixados").execute()
+        dados_acessos = resp_acessos.data
+    except:
+        dados_acessos = []
+        
+    total_ia_hoje = 0
+    total_editais_rede = 0
+    
+    if dados_acessos:
+        df_acc = pd.DataFrame(dados_acessos)
+        if "usos_ia_hoje" in df_acc.columns: 
+            total_ia_hoje = int(df_acc["usos_ia_hoje"].fillna(0).sum())
+        if "editais_baixados" in df_acc.columns: 
+            total_editais_rede = int(df_acc["editais_baixados"].fillna(0).sum())
+
+    # 2. Constrói os DataFrames de Clientes e Licenças
     df_cli = pd.DataFrame(dados_clientes) if dados_clientes else pd.DataFrame()
     df_lic = pd.DataFrame(dados_licencas) if dados_licencas else pd.DataFrame()
     
+    st.markdown("#### 👥 Carteira de Clientes e Instalações")
     c1, c2, c3 = st.columns(3)
     c1.metric("Empresas Clientes", len(df_cli))
     c2.metric("Total de Máquinas (PCs)", len(df_lic))
-    c3.metric("Módulos Ativos (Geral)", len(supabase.table("licencas_ferramentas").select("id").eq("ativa", True).execute().data))
-
-# ==========================================
-# ABA 2: GESTÃO DE CLIENTES
-# ==========================================
+    
+    # Busca os módulos ativos reais (sem causar erro caso não exista)
+    try:
+        modulos_ativos = len(supabase.table("licencas_ferramentas").select("id").eq("ativa", True).execute().data)
+    except:
+        modulos_ativos = 0
+    c3.metric("Módulos Ativos (Geral)", modulos_ativos)
+    
+    st.divider()
+    
+    st.markdown("#### 🚀 Engajamento e Volume da Rede")
+    c4, c5 = st.columns(2)
+    c4.metric(
+        "🤖 Análises com IA (Hoje)", 
+        total_ia_hoje, 
+        help="Soma de todas as análises feitas pelas máquinas hoje."
+    )
+    c5.metric(
+        "📥 Total de Editais Baixados", 
+        f"{total_editais_rede:,}".replace(",", "."), 
+        help="Soma histórica de todos os editais encontrados e baixados por todos os seus clientes em conjunto."
+    )
 # ==========================================
 # ABA 2: GESTÃO DE CLIENTES (CRM)
 # ==========================================
