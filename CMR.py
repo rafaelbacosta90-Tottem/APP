@@ -238,6 +238,7 @@ with aba_licencas:
     if not dados_clientes or not dados_ferramentas:
         st.warning("⚠️ Cadastre pelo menos um Cliente e uma Ferramenta para gerar licenças.")
     else:
+        # --- BLOCO 1: EMISSÃO DE NOVA LICENÇA ---
         with st.container(border=True):
             st.subheader("➕ Emitir Nova Licença de Máquina")
             lista_clientes = [f"{c['cnpj']} - {c.get('razao_social', '')}" for c in dados_clientes]
@@ -254,55 +255,96 @@ with aba_licencas:
                     
                     datas_ferramentas = {}
                     for fer in ferramentas_selecionadas:
-                        datas_ferramentas[fer] = st.date_input(f"Validade para: {fer.split(' - ')[1]}", min_value=datetime.date.today(), key=f"dt_{fer}")
+                        datas_ferramentas[fer] = st.date_input(f"Validade para: {fer.split(' - ')[1]}", min_value=datetime.date.today(), key=f"dt_new_{fer}")
                     
                 if st.form_submit_button("💾 Gerar Licença e Módulos", type="primary", use_container_width=True):
                     cnpj_alvo = cliente_sel.split(" - ")[0]
                     if not hwid or not ferramentas_selecionadas: 
-                        st.error("Preencha HWID e selecione ao menos uma ferramenta.")
+                        st.error("Preencha o HWID e selecione ao menos uma ferramenta.")
                     else:
-                        res_lic = supabase.table("licencas").insert({"cnpj": cnpj_alvo, "hwid": hwid, "limite_ia_diario": limite_ia}).execute()
-                        nova_lic_id = res_lic.data[0]['id']
-                        
-                        payload_ferramentas = []
-                        for fer in ferramentas_selecionadas:
-                            fer_id = int(fer.split(" - ")[0])
-                            payload_ferramentas.append({
-                                "licenca_id": nova_lic_id,
-                                "ferramenta_id": fer_id,
-                                "data_expiracao": str(datas_ferramentas[fer]),
-                                "ativa": True
-                            })
-                        supabase.table("licencas_ferramentas").insert(payload_ferramentas).execute()
-                        
-                        st.success("✅ Licença e ferramentas vinculadas com sucesso!")
-                        st.rerun()
+                        try:
+                            # 1. Cria a licença base da máquina
+                            res_lic = supabase.table("licencas").insert({
+                                "cnpj": cnpj_alvo, 
+                                "hwid": hwid, 
+                                "limite_ia_diario": limite_ia
+                            }).execute()
+                            nova_lic_id = res_lic.data[0]['id']
+                            
+                            # 2. Vincula as ferramentas
+                            payload_ferramentas = []
+                            for fer in ferramentas_selecionadas:
+                                fer_id = int(fer.split(" - ")[0])
+                                payload_ferramentas.append({
+                                    "licenca_id": nova_lic_id,
+                                    "ferramenta_id": fer_id,
+                                    "data_expiracao": str(datas_ferramentas[fer]),
+                                    "ativa": True
+                                })
+                            supabase.table("licencas_ferramentas").insert(payload_ferramentas).execute()
+                            
+                            st.success("✅ Licença e ferramentas vinculadas com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao gerar licença: {e}")
 
         st.divider()
+
+        # --- BLOCO 2: EDIÇÃO DE LICENÇA EXISTENTE ---
         with st.container(border=True):
-            st.subheader("⚙️ Gerenciar Módulos por Máquina")
+            st.subheader("✏️ Editar Licença (Máquina e Módulos)")
             lista_licencas_edit = [f"{l['id']} - Máquina: {l['hwid']} (CNPJ: {l['cnpj']})" for l in dados_licencas]
             
-            lic_escolha = st.selectbox("Escolha a Instalação (Máquina) para gerenciar as Ferramentas:", [""] + lista_licencas_edit)
+            lic_escolha = st.selectbox("Escolha a Instalação (Máquina) para gerenciar:", [""] + lista_licencas_edit)
             
             if lic_escolha:
                 id_lic_editar = int(lic_escolha.split(" - ")[0])
+                licenca_atual = next((item for item in dados_licencas if item["id"] == id_lic_editar), None)
+                
+                # Subseção 2.1: Dados da Máquina (Base)
+                st.markdown("#### 1. Configurações da Máquina")
+                with st.form("form_edit_maquina"):
+                    col_base1, col_base2 = st.columns(2)
+                    novo_hwid = col_base1.text_input("HWID", value=licenca_atual.get("hwid", ""))
+                    novo_limite_ia = col_base2.number_input("Limite de Análises IA/Dia", min_value=1, value=int(licenca_atual.get("limite_ia_diario", 10)))
+                    
+                    if st.form_submit_button("💾 Atualizar Dados da Máquina", type="primary"):
+                        supabase.table("licencas").update({
+                            "hwid": novo_hwid,
+                            "limite_ia_diario": novo_limite_ia
+                        }).eq("id", id_lic_editar).execute()
+                        st.success("✅ Dados da máquina atualizados!")
+                        st.rerun()
+
+                # Subseção 2.2: Ferramentas Vinculadas (Validade e Status)
+                st.markdown("#### 2. Módulos Vinculados (Validade e Status)")
                 modulos_ativos = supabase.table("licencas_ferramentas").select("*, ferramentas(nome)").eq("licenca_id", id_lic_editar).execute().data
                 
                 if modulos_ativos:
-                    st.markdown("##### Ferramentas Instaladas nesta Máquina:")
                     for mod in modulos_ativos:
                         with st.container(border=True):
-                            c_m1, c_m2, c_m3 = st.columns([2, 1, 1])
-                            c_m1.markdown(f"**🛠️ {mod['ferramentas']['nome']}**")
-                            
-                            nova_dt = c_m2.date_input("Validade", value=datetime.datetime.strptime(mod['data_expiracao'], "%Y-%m-%d").date(), key=f"edt_{mod['id']}")
-                            novo_status = c_m3.toggle("Status", value=mod['ativa'], key=f"tgl_{mod['id']}")
-                            
-                            if st.button("Atualizar Módulo", key=f"btn_{mod['id']}", use_container_width=True):
-                                supabase.table("licencas_ferramentas").update({"data_expiracao": str(nova_dt), "ativa": novo_status}).eq("id", mod["id"]).execute()
-                                st.success(f"{mod['ferramentas']['nome']} atualizado!")
-                                st.rerun()
+                            with st.form(f"form_mod_{mod['id']}"):
+                                c_m1, c_m2, c_m3 = st.columns([2, 1, 1])
+                                
+                                # Título da ferramenta alinhado
+                                c_m1.markdown(f"<br>**🛠️ {mod['ferramentas']['nome']}**", unsafe_allow_html=True)
+                                
+                                # Tratamento de data
+                                try:
+                                    dt_atual = datetime.datetime.strptime(mod['data_expiracao'], "%Y-%m-%d").date()
+                                except:
+                                    dt_atual = datetime.date.today()
+                                
+                                nova_dt = c_m2.date_input("Validade", value=dt_atual)
+                                novo_status = c_m3.toggle("Módulo Ativo?", value=mod['ativa'])
+                                
+                                if st.form_submit_button("Atualizar Módulo", use_container_width=True):
+                                    supabase.table("licencas_ferramentas").update({
+                                        "data_expiracao": str(nova_dt), 
+                                        "ativa": novo_status
+                                    }).eq("id", mod["id"]).execute()
+                                    st.success(f"✅ {mod['ferramentas']['nome']} atualizado com sucesso!")
+                                    st.rerun()
                 else:
                     st.info("Nenhuma ferramenta vinculada a esta máquina.")
 
