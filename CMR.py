@@ -8,17 +8,6 @@ import re
 # --- Configuração da Página ---
 st.set_page_config(page_title="Portal de Gestão SaaS", page_icon="🏢", layout="wide")
 
-# --- Estilização Customizada Opcional ---
-st.markdown("""
-    <style>
-    .stMetric {
-        background-color: #f0f2f6;
-        padding: 15px;
-        border-radius: 8px;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 
@@ -31,12 +20,12 @@ def realizar_login():
 def realizar_logout():
     st.session_state["autenticado"] = False
 
-# --- Tela de Login Melhorada ---
+# --- Tela de Login ---
 if not st.session_state["autenticado"]:
-    st.markdown("<br><br><br>", unsafe_allow_html=True) # Espaçamento superior
+    st.write("<br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1.2, 1])
     with col2:
-        with st.container(border=True): # Design em Card para o Login
+        with st.container(border=True):
             st.title("🔒 Acesso Restrito")
             st.markdown("Insira suas credenciais para gerenciar o sistema SaaS.")
             st.divider()
@@ -44,7 +33,7 @@ if not st.session_state["autenticado"]:
                 st.text_input("Usuário", key="usuario")
                 st.text_input("Senha", type="password", key="senha")
                 st.form_submit_button("Entrar", on_click=realizar_login, use_container_width=True)
-    st.stop()  
+    st.stop() 
 
 # --- Conexão com Supabase ---
 @st.cache_resource
@@ -68,7 +57,7 @@ aba_dashboard, aba_clientes, aba_ferramentas, aba_licencas, aba_vencimentos, aba
     "📊 Dashboard", "👥 Clientes", "🛠️ Ferramentas", "🔑 Licenças (Máquinas)", "⏰ Vencimentos", "📡 Auditoria", "🚀 Sistema"
 ])
 
-# Buscas globais
+# Buscas globais e Variáveis Essenciais
 try:
     dados_clientes = supabase.table("clientes").select("*").execute().data
     dados_licencas = supabase.table("licencas").select("*").order("id").execute().data
@@ -77,13 +66,16 @@ except Exception as e:
     st.error(f"Erro ao conectar com o banco de dados: {e}")
     dados_clientes, dados_licencas, dados_ferramentas = [], [], []
 
+# Constrói DataFrames Globais para evitar falhas nas abas
+df_cli = pd.DataFrame(dados_clientes) if dados_clientes else pd.DataFrame()
+df_lic = pd.DataFrame(dados_licencas) if dados_licencas else pd.DataFrame()
+
 # ==========================================
 # ABA 1: DASHBOARD
 # ==========================================
 with aba_dashboard:
-    st.subheader("📊 Visão Geral do SaaS")
+    st.subheader("Visão Geral do SaaS")
     
-    # Puxa os dados atualizados da telemetria
     try:
         resp_acessos = supabase.table("acessos_clientes").select("usos_ia_hoje, editais_baixados").execute()
         dados_acessos = resp_acessos.data
@@ -100,9 +92,6 @@ with aba_dashboard:
         if "editais_baixados" in df_acc.columns: 
             total_editais_rede = int(df_acc["editais_baixados"].fillna(0).sum())
 
-    df_cli = pd.DataFrame(dados_clientes) if dados_clientes else pd.DataFrame()
-    df_lic = pd.DataFrame(dados_licencas) if dados_licencas else pd.DataFrame()
-    
     try:
         modulos_ativos = len(supabase.table("licencas_ferramentas").select("id").eq("ativa", True).execute().data)
     except:
@@ -169,7 +158,7 @@ with aba_clientes:
     col_cad, col_edit = st.columns(2)
     
     with col_cad:
-        with st.container(border=True): # Agrupamento visual
+        with st.container(border=True):
             st.subheader("➕ Novo Cliente")
             with st.form("form_cliente", clear_on_submit=True):
                 cnpj = st.text_input("CNPJ (Apenas números)", max_chars=14)
@@ -193,7 +182,7 @@ with aba_clientes:
                             st.error(f"Erro: Este CNPJ já pode estar cadastrado. ({e})")
                         
     with col_edit:
-        with st.container(border=True): # Agrupamento visual
+        with st.container(border=True):
             st.subheader("✏️ Editar Cliente")
             if dados_clientes:
                 lista_clientes_edit = [f"{c['cnpj']} - {c.get('razao_social', 'Sem Nome')}" for c in dados_clientes]
@@ -290,7 +279,6 @@ with aba_licencas:
                         st.rerun()
 
         st.divider()
-        
         with st.container(border=True):
             st.subheader("⚙️ Gerenciar Módulos por Máquina")
             lista_licencas_edit = [f"{l['id']} - Máquina: {l['hwid']} (CNPJ: {l['cnpj']})" for l in dados_licencas]
@@ -305,14 +293,13 @@ with aba_licencas:
                     st.markdown("##### Ferramentas Instaladas nesta Máquina:")
                     for mod in modulos_ativos:
                         with st.container(border=True):
-                            c_m1, c_m2, c_m3, c_m4 = st.columns([2, 1, 1, 1]) # Adicionado c_m4 para o botão
-                            c_m1.markdown(f"<br>**🛠️ {mod['ferramentas']['nome']}**", unsafe_allow_html=True)
+                            c_m1, c_m2, c_m3 = st.columns([2, 1, 1])
+                            c_m1.markdown(f"**🛠️ {mod['ferramentas']['nome']}**")
                             
                             nova_dt = c_m2.date_input("Validade", value=datetime.datetime.strptime(mod['data_expiracao'], "%Y-%m-%d").date(), key=f"edt_{mod['id']}")
-                            novo_status = c_m3.toggle("Ativo", value=mod['ativa'], key=f"tgl_{mod['id']}")
+                            novo_status = c_m3.toggle("Status", value=mod['ativa'], key=f"tgl_{mod['id']}")
                             
-                            c_m4.markdown("<br>", unsafe_allow_html=True) # Alinhamento visual
-                            if c_m4.button("Atualizar", key=f"btn_{mod['id']}", use_container_width=True):
+                            if st.button("Atualizar Módulo", key=f"btn_{mod['id']}", use_container_width=True):
                                 supabase.table("licencas_ferramentas").update({"data_expiracao": str(nova_dt), "ativa": novo_status}).eq("id", mod["id"]).execute()
                                 st.success(f"{mod['ferramentas']['nome']} atualizado!")
                                 st.rerun()
@@ -331,3 +318,137 @@ with aba_vencimentos:
     
     if not dados_venc:
         st.info("Nenhum módulo ativo para relatar.")
+    else:
+        lista_plana = []
+        for d in dados_venc:
+            try:
+                nome_fer = d.get('ferramentas', {}).get('nome') if d.get('ferramentas') else f"Ferramenta ID {d.get('ferramenta_id')}"
+                
+                dados_cli = d.get('licencas', {}).get('clientes') or {}
+                cliente_nome = dados_cli.get('razao_social')
+                telefone_cli = dados_cli.get('telefone')
+                
+                if not cliente_nome or str(cliente_nome).lower() == 'nan':
+                    cliente_nome = f"Cliente (CNPJ: {d['licencas']['cnpj']})"
+                
+                if not telefone_cli or str(telefone_cli).lower() == 'nan':
+                    telefone_cli = ""
+
+                lista_plana.append({
+                    "id_relacao": d['id'],
+                    "ferramenta": nome_fer,
+                    "data_exp": d['data_expiracao'],
+                    "cnpj": d['licencas']['cnpj'],
+                    "hwid": d['licencas']['hwid'],
+                    "cliente": cliente_nome,
+                    "telefone": telefone_cli
+                })
+            except Exception as e: 
+                pass
+            
+        if lista_plana:
+            df_venc = pd.DataFrame(lista_plana)
+            hoje = datetime.date.today()
+            df_venc['data_exp_dt'] = pd.to_datetime(df_venc['data_exp']).dt.date
+            df_venc['dias_restantes'] = (df_venc['data_exp_dt'] - hoje).apply(lambda x: x.days)
+            
+            df_filtrado = df_venc.sort_values(by="dias_restantes")
+            
+            for index, row in df_filtrado.iterrows():
+                dias = row['dias_restantes']
+                
+                if dias <= 20: 
+                    cor = "red" if dias < 0 else ("orange" if dias == 0 else "green")
+                    status = f"Vencida há {abs(dias)} dias" if dias < 0 else ("Vence HOJE!" if dias == 0 else f"Vence em {dias} dias")
+
+                    with st.container(border=True):
+                        col_i, col_m, col_w = st.columns([2, 4, 2])
+                        with col_i:
+                            st.markdown(f"🏢 **{row['cliente']}**")
+                            st.markdown(f"🛠️ Módulo: {row['ferramenta']}")
+                        with col_m:
+                            st.markdown(f"⏳ **Status:** :{cor}[{status}] (Validade: {row['data_exp_dt'].strftime('%d/%m/%Y')})")
+                        with col_w:
+                            if row['telefone']:
+                                numero_limpo = re.sub(r'\D', '', str(row['telefone']))
+                                msg = f"Olá {row['cliente']}! A licença do módulo *{row['ferramenta']}* expira em {dias} dias. Deseja agilizar a renovação?" if dias > 0 else f"Olá {row['cliente']}! A licença do módulo *{row['ferramenta']}* expirou. Vamos renovar?"
+                                st.link_button("💬 Cobrar no WhatsApp", f"https://wa.me/{numero_limpo}?text={urllib.parse.quote(msg)}", use_container_width=True)
+                            else:
+                                st.warning("⚠️ Cliente sem WhatsApp cadastrado")
+
+# ==========================================
+# ABA 6: AUDITORIA (LOGS E CONSUMO)
+# ==========================================
+with aba_acessos:
+    st.subheader("📡 Logs de Acesso, Máquinas e Consumo")
+    
+    if st.button("🔄 Atualizar Tabela de Logs"): 
+        st.rerun()
+        
+    try:
+        resp_acessos = supabase.table("acessos_clientes").select("*").order("data_ultimo_acesso", desc=True).execute()
+        
+        if resp_acessos.data:
+            df_acessos = pd.DataFrame(resp_acessos.data)
+            
+            if not df_cli.empty:
+                df_acessos = pd.merge(df_acessos, df_cli[['cnpj', 'razao_social']], on='cnpj', how='left')
+            else:
+                df_acessos['razao_social'] = "Desconhecido"
+            
+            colunas_ordem = ["cnpj", "razao_social", "maquina", "versao_atual", "usos_ia_hoje", "editais_baixados", "data_ultimo_acesso"]
+            df_acessos = df_acessos[[c for c in colunas_ordem if c in df_acessos.columns]]
+            
+            df_acessos["data_ultimo_acesso"] = pd.to_datetime(df_acessos["data_ultimo_acesso"]).dt.tz_localize(None) - pd.Timedelta(hours=3)
+            
+            with st.container(border=True):
+                st.dataframe(
+                    df_acessos, 
+                    column_config={
+                        "cnpj": "CNPJ", 
+                        "razao_social": "Cliente", 
+                        "maquina": "Computador (Identificador)", 
+                        "versao_atual": "Versão do App", 
+                        "usos_ia_hoje": "Análises IA (Hoje)", 
+                        "editais_baixados": "Editais Sincronizados",
+                        "data_ultimo_acesso": st.column_config.DatetimeColumn("Último Acesso / Ping", format="DD/MM/YYYY HH:mm:ss")
+                    }, 
+                    use_container_width=True, 
+                    hide_index=True
+                )
+        else:
+            st.info("Nenhum log de acesso registado pelas máquinas ainda.")
+            
+    except Exception as e:
+        st.error(f"Erro ao processar os logs de auditoria: {e}")
+
+# ==========================================
+# ABA 7: SISTEMA & IA
+# ==========================================
+with aba_versoes:
+    st.subheader("🚀 Atualizações (OTA) e Chaves de IA")
+    try:
+        dados_v = supabase.table("controle_versoes").select("*").eq("id", 1).single().execute().data
+        if dados_v:
+            with st.container(border=True):
+                with st.form("form_versoes"):
+                    st.markdown("**1. Atualizações Obrigatórias do Executável**")
+                    c_v1, c_v2 = st.columns(2)
+                    v_atual = c_v1.text_input("Versão Atual (Mais Recente)", value=dados_v.get("versao_atual", ""))
+                    v_minima = c_v2.text_input("Versão Mínima Obrigatória", value=dados_v.get("versao_minima_obrigatoria", ""))
+                    url_down = st.text_input("Link de Download Direto do .exe", value=dados_v.get("url_download", ""))
+                    
+                    st.divider()
+                    st.markdown("**2. Inteligência Artificial (Global)**")
+                    c_dots = st.text_input("Chave API: DOTS (OpenRouter)", value=dados_v.get("chave_dots", ""), type="password")
+                    c_gemini = st.text_input("Chave API: Google Gemini (Fallback)", value=dados_v.get("chave_gemini", ""), type="password")
+                    
+                    if st.form_submit_button("💾 Salvar Configurações na Nuvem", type="primary"):
+                        supabase.table("controle_versoes").update({
+                            "versao_atual": v_atual, "versao_minima_obrigatoria": v_minima, "url_download": url_down,
+                            "chave_dots": c_dots, "chave_gemini": c_gemini
+                        }).eq("id", 1).execute()
+                        st.success("✅ Configurações e Chaves guardadas com segurança!")
+                        st.rerun()
+    except Exception as e:
+        st.error(f"Erro ao carregar configurações globais: {e}")
