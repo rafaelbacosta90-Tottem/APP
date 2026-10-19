@@ -140,15 +140,20 @@ with aba_clientes:
         if not df_cli_display.empty: df_cli_display["editais_baixados"] = 0
 
     if not df_cli_display.empty:
+        # Garante que a coluna ativo exista no dataframe para não dar erro se ainda não foi criada no Supabase
+        if 'ativo' not in df_cli_display.columns:
+            df_cli_display['ativo'] = True
+            
         st.dataframe(
             df_cli_display,
             column_config={
                 "cnpj": "CNPJ", "razao_social": "Razão Social", 
-                "contato_nome": "Contato", "telefone": "WhatsApp", "email": "E-mail",
-                "editais_baixados": st.column_config.NumberColumn("Editais Baixados", help="Total de editais encontrados e processados por este cliente"),
+                "contato_nome": "Contato", "telefone": "WhatsApp", 
+                "ativo": st.column_config.CheckboxColumn("Ativo?", help="Status do cliente no sistema"),
+                "editais_baixados": st.column_config.NumberColumn("Editais Baixados", help="Total de editais baixados"),
                 "data_cadastro": st.column_config.DatetimeColumn("Cadastrado", format="DD/MM/YYYY")
             }, hide_index=True, use_container_width=True,
-            column_order=["cnpj", "razao_social", "contato_nome", "telefone", "editais_baixados", "data_cadastro"]
+            column_order=["cnpj", "razao_social", "contato_nome", "telefone", "ativo", "editais_baixados", "data_cadastro"]
         )
     else:
         st.info("Nenhum cliente cadastrado ainda.")
@@ -157,6 +162,7 @@ with aba_clientes:
 
     col_cad, col_edit = st.columns(2)
     
+    # --- BLOCO 2.1: NOVO CLIENTE ---
     with col_cad:
         with st.container(border=True):
             st.subheader("➕ Novo Cliente")
@@ -174,16 +180,18 @@ with aba_clientes:
                         try:
                             supabase.table("clientes").insert({
                                 "cnpj": cnpj, "razao_social": razao_social, 
-                                "contato_nome": contato_nome, "telefone": telefone, "email": email
+                                "contato_nome": contato_nome, "telefone": telefone, "email": email,
+                                "ativo": True # Cliente já nasce ativo
                             }).execute()
                             st.success("✅ Cliente salvo com sucesso!")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Erro: Este CNPJ já pode estar cadastrado. ({e})")
+                            st.error(f"Erro: Este CNPJ já pode estar cadastrado ou a coluna 'ativo' não foi criada no banco. ({e})")
                         
+    # --- BLOCO 2.2: EDITAR / INATIVAR CLIENTE ---
     with col_edit:
         with st.container(border=True):
-            st.subheader("✏️ Editar Cliente")
+            st.subheader("✏️ Editar ou Inativar Cliente")
             if dados_clientes:
                 lista_clientes_edit = [f"{c['cnpj']} - {c.get('razao_social', 'Sem Nome')}" for c in dados_clientes]
                 cliente_escolha = st.selectbox("Selecione o Cliente:", [""] + lista_clientes_edit)
@@ -198,15 +206,34 @@ with aba_clientes:
                         novo_tel = st.text_input("WhatsApp", value=cliente_atual.get("telefone", ""))
                         novo_email = st.text_input("E-mail", value=cliente_atual.get("email", ""))
                         
+                        st.markdown("---")
+                        # Verifica o status atual (se a coluna não existir, assume True)
+                        status_atual = cliente_atual.get("ativo", True)
+                        novo_status = st.toggle("✅ Cliente Ativo no Sistema", value=status_atual, help="Desmarque para realizar a exclusão lógica do cliente.")
+                        
                         if st.form_submit_button("💾 Atualizar Dados", type="primary", use_container_width=True):
-                            supabase.table("clientes").update({
-                                "razao_social": novo_nome,
-                                "contato_nome": novo_contato,
-                                "telefone": novo_tel,
-                                "email": novo_email
-                            }).eq("cnpj", cnpj_editar).execute()
-                            st.success("✅ Cliente atualizado com sucesso!")
-                            st.rerun()
+                            try:
+                                # 1. Atualiza os dados do cliente
+                                supabase.table("clientes").update({
+                                    "razao_social": novo_nome,
+                                    "contato_nome": novo_contato,
+                                    "telefone": novo_tel,
+                                    "email": novo_email,
+                                    "ativo": novo_status
+                                }).eq("cnpj", cnpj_editar).execute()
+                                
+                                # 2. Lógica de Segurança: Se inativou o cliente, derruba as licenças ativas dele
+                                if not novo_status:
+                                    licenca_cli = next((l for l in dados_licencas if l['cnpj'] == cnpj_editar), None)
+                                    if licenca_cli:
+                                        supabase.table("licencas_ferramentas").update({"ativa": False}).eq("licenca_id", licenca_cli["id"]).execute()
+                                        st.warning("⚠️ Cliente inativado. Todos os módulos vinculados a ele também foram bloqueados com sucesso.")
+                                else:
+                                    st.success("✅ Cliente atualizado com sucesso!")
+                                
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao atualizar: {e}")
             else:
                 st.info("Cadastre um cliente primeiro para poder editá-lo.")
 
@@ -232,15 +259,15 @@ with aba_ferramentas:
                 st.dataframe(pd.DataFrame(dados_ferramentas), hide_index=True, use_container_width=True)
 
 # ==========================================
-# ABA 4: GESTÃO DE LICENÇAS (MÁQUINAS E MÓDULOS)
+# ABA 4: GESTÃO DE LICENÇAS (CLIENTES E MÓDULOS)
 # ==========================================
 with aba_licencas:
     if not dados_clientes or not dados_ferramentas:
-        st.warning("⚠️ Cadastre pelo menos um Cliente e uma Ferramenta para gerar licenças.")
+        st.warning("⚠️ Cadastre pelo menos um Cliente e uma Ferramenta para gerenciar licenças.")
     else:
-        # --- BLOCO 1: EMISSÃO DE NOVA LICENÇA ---
+        # --- BLOCO 1: ATRIBUIÇÃO DE LICENÇA/MÓDULOS AO CLIENTE ---
         with st.container(border=True):
-            st.subheader("➕ Emitir Nova Licença de Máquina")
+            st.subheader("➕ Conceder Licenças/Módulos para Cliente")
             lista_clientes = [f"{c['cnpj']} - {c.get('razao_social', '')}" for c in dados_clientes]
             lista_ferramentas = [f"{f['id']} - {f['nome']}" for f in dados_ferramentas]
             
@@ -248,8 +275,7 @@ with aba_licencas:
                 c1, c2 = st.columns(2)
                 with c1:
                     cliente_sel = st.selectbox("Selecione o Cliente:", lista_clientes)
-                    hwid = st.text_input("HWID (Identificador do Computador)")
-                    limite_ia = st.number_input("Limite de Análises IA/Dia (Neste PC)", min_value=1, value=10)
+                    limite_ia = st.number_input("Limite de Análises IA/Dia (Para este Cliente)", min_value=1, value=10)
                 with c2:
                     ferramentas_selecionadas = st.multiselect("Selecione os Módulos/Ferramentas:", lista_ferramentas)
                     
@@ -257,96 +283,121 @@ with aba_licencas:
                     for fer in ferramentas_selecionadas:
                         datas_ferramentas[fer] = st.date_input(f"Validade para: {fer.split(' - ')[1]}", min_value=datetime.date.today(), key=f"dt_new_{fer}")
                     
-                if st.form_submit_button("💾 Gerar Licença e Módulos", type="primary", use_container_width=True):
+                if st.form_submit_button("💾 Salvar Licenças", type="primary", use_container_width=True):
                     cnpj_alvo = cliente_sel.split(" - ")[0]
-                    if not hwid or not ferramentas_selecionadas: 
-                        st.error("Preencha o HWID e selecione ao menos uma ferramenta.")
+                    if not ferramentas_selecionadas: 
+                        st.error("Selecione ao menos um módulo/ferramenta.")
                     else:
                         try:
-                            # 1. Cria a licença base da máquina
-                            res_lic = supabase.table("licencas").insert({
-                                "cnpj": cnpj_alvo, 
-                                "hwid": hwid, 
-                                "limite_ia_diario": limite_ia
-                            }).execute()
-                            nova_lic_id = res_lic.data[0]['id']
+                            # 1. Verifica se o cliente já tem um perfil de licença (para não duplicar)
+                            licenca_existente = next((l for l in dados_licencas if l['cnpj'] == cnpj_alvo), None)
                             
-                            # 2. Vincula as ferramentas
+                            if not licenca_existente:
+                                # Cria a licença base do cliente (HWID não é mais obrigatório aqui)
+                                res_lic = supabase.table("licencas").insert({
+                                    "cnpj": cnpj_alvo, 
+                                    "limite_ia_diario": limite_ia
+                                }).execute()
+                                id_lic_alvo = res_lic.data[0]['id']
+                            else:
+                                id_lic_alvo = licenca_existente['id']
+                                # Atualiza o limite de IA caso o usuário tenha digitado um novo valor
+                                supabase.table("licencas").update({"limite_ia_diario": limite_ia}).eq("id", id_lic_alvo).execute()
+                            
+                            # 2. Vincula as ferramentas ao cliente
                             payload_ferramentas = []
                             for fer in ferramentas_selecionadas:
                                 fer_id = int(fer.split(" - ")[0])
                                 payload_ferramentas.append({
-                                    "licenca_id": nova_lic_id,
+                                    "licenca_id": id_lic_alvo,
                                     "ferramenta_id": fer_id,
                                     "data_expiracao": str(datas_ferramentas[fer]),
                                     "ativa": True
                                 })
                             supabase.table("licencas_ferramentas").insert(payload_ferramentas).execute()
                             
-                            st.success("✅ Licença e ferramentas vinculadas com sucesso!")
+                            st.success("✅ Módulos vinculados ao cliente com sucesso!")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Erro ao gerar licença: {e}")
+                            st.error(f"Erro ao gerar licença: {e} - Verifique se a coluna 'hwid' permite valores nulos no banco de dados.")
 
         st.divider()
 
-        # --- BLOCO 2: EDIÇÃO DE LICENÇA EXISTENTE ---
+        # --- BLOCO 2: EDIÇÃO DE LICENÇA EXISTENTE (POR CLIENTE) ---
         with st.container(border=True):
-            st.subheader("✏️ Editar Licença (Máquina e Módulos)")
-            lista_licencas_edit = [f"{l['id']} - Máquina: {l['hwid']} (CNPJ: {l['cnpj']})" for l in dados_licencas]
+            st.subheader("✏️ Buscar e Editar Licenças do Cliente")
             
-            lic_escolha = st.selectbox("Escolha a Instalação (Máquina) para gerenciar:", [""] + lista_licencas_edit)
+            # Campo de pesquisa livre
+            busca_cliente = st.text_input("🔍 Digite o Nome do Cliente (Razão Social) ou CNPJ para buscar as licenças:")
             
-            if lic_escolha:
-                id_lic_editar = int(lic_escolha.split(" - ")[0])
-                licenca_atual = next((item for item in dados_licencas if item["id"] == id_lic_editar), None)
+            if busca_cliente:
+                opcoes_filtradas = []
+                clientes_processados = [] # Evita listar o mesmo cliente duas vezes
                 
-                # Subseção 2.1: Dados da Máquina (Base)
-                st.markdown("#### 1. Configurações da Máquina")
-                with st.form("form_edit_maquina"):
-                    col_base1, col_base2 = st.columns(2)
-                    novo_hwid = col_base1.text_input("HWID", value=licenca_atual.get("hwid", ""))
-                    novo_limite_ia = col_base2.number_input("Limite de Análises IA/Dia", min_value=1, value=int(licenca_atual.get("limite_ia_diario", 10)))
+                for l in dados_licencas:
+                    if l['cnpj'] in clientes_processados:
+                        continue
+                        
+                    cli = next((c for c in dados_clientes if c['cnpj'] == l['cnpj']), {})
+                    nome_cliente = cli.get('razao_social', 'Cliente Desconhecido')
                     
-                    if st.form_submit_button("💾 Atualizar Dados da Máquina", type="primary"):
-                        supabase.table("licencas").update({
-                            "hwid": novo_hwid,
-                            "limite_ia_diario": novo_limite_ia
-                        }).eq("id", id_lic_editar).execute()
-                        st.success("✅ Dados da máquina atualizados!")
-                        st.rerun()
-
-                # Subseção 2.2: Ferramentas Vinculadas (Validade e Status)
-                st.markdown("#### 2. Módulos Vinculados (Validade e Status)")
-                modulos_ativos = supabase.table("licencas_ferramentas").select("*, ferramentas(nome)").eq("licenca_id", id_lic_editar).execute().data
+                    if busca_cliente.lower() in nome_cliente.lower() or busca_cliente in l['cnpj']:
+                        rotulo = f"{l['id']} - {nome_cliente} (CNPJ: {l['cnpj']})"
+                        opcoes_filtradas.append(rotulo)
+                        clientes_processados.append(l['cnpj'])
                 
-                if modulos_ativos:
-                    for mod in modulos_ativos:
-                        with st.container(border=True):
-                            with st.form(f"form_mod_{mod['id']}"):
-                                c_m1, c_m2, c_m3 = st.columns([2, 1, 1])
-                                
-                                # Título da ferramenta alinhado
-                                c_m1.markdown(f"<br>**🛠️ {mod['ferramentas']['nome']}**", unsafe_allow_html=True)
-                                
-                                # Tratamento de data
-                                try:
-                                    dt_atual = datetime.datetime.strptime(mod['data_expiracao'], "%Y-%m-%d").date()
-                                except:
-                                    dt_atual = datetime.date.today()
-                                
-                                nova_dt = c_m2.date_input("Validade", value=dt_atual)
-                                novo_status = c_m3.toggle("Módulo Ativo?", value=mod['ativa'])
-                                
-                                if st.form_submit_button("Atualizar Módulo", use_container_width=True):
-                                    supabase.table("licencas_ferramentas").update({
-                                        "data_expiracao": str(nova_dt), 
-                                        "ativa": novo_status
-                                    }).eq("id", mod["id"]).execute()
-                                    st.success(f"✅ {mod['ferramentas']['nome']} atualizado com sucesso!")
-                                    st.rerun()
+                if opcoes_filtradas:
+                    lic_escolha = st.selectbox("Selecione o perfil do cliente para editar:", opcoes_filtradas)
+                    
+                    if lic_escolha:
+                        id_lic_editar = int(lic_escolha.split(" - ")[0])
+                        licenca_atual = next((item for item in dados_licencas if item["id"] == id_lic_editar), None)
+                        
+                        # Subseção 2.1: Dados Globais do Cliente
+                        st.markdown("#### 1. Configurações Globais")
+                        with st.form("form_edit_limite"):
+                            novo_limite_ia = st.number_input("Limite Global de Análises IA/Dia", min_value=1, value=int(licenca_atual.get("limite_ia_diario", 10)))
+                            
+                            if st.form_submit_button("💾 Atualizar Limite de IA", type="primary"):
+                                supabase.table("licencas").update({
+                                    "limite_ia_diario": novo_limite_ia
+                                }).eq("id", id_lic_editar).execute()
+                                st.success("✅ Limite atualizado!")
+                                st.rerun()
+
+                        # Subseção 2.2: Ferramentas Vinculadas (Validade e Status)
+                        st.markdown("#### 2. Módulos Ativos para este Cliente")
+                        modulos_ativos = supabase.table("licencas_ferramentas").select("*, ferramentas(nome)").eq("licenca_id", id_lic_editar).execute().data
+                        
+                        if modulos_ativos:
+                            for mod in modulos_ativos:
+                                with st.container(border=True):
+                                    with st.form(f"form_mod_{mod['id']}"):
+                                        c_m1, c_m2, c_m3 = st.columns([2, 1, 1])
+                                        
+                                        c_m1.markdown(f"<br>**🛠️ {mod['ferramentas']['nome']}**", unsafe_allow_html=True)
+                                        
+                                        try:
+                                            dt_atual = datetime.datetime.strptime(mod['data_expiracao'], "%Y-%m-%d").date()
+                                        except:
+                                            dt_atual = datetime.date.today()
+                                        
+                                        nova_dt = c_m2.date_input("Validade", value=dt_atual)
+                                        novo_status = c_m3.toggle("Módulo Ativo?", value=mod['ativa'])
+                                        
+                                        if st.form_submit_button("Atualizar Módulo", use_container_width=True):
+                                            supabase.table("licencas_ferramentas").update({
+                                                "data_expiracao": str(nova_dt), 
+                                                "ativa": novo_status
+                                            }).eq("id", mod["id"]).execute()
+                                            st.success(f"✅ {mod['ferramentas']['nome']} atualizado com sucesso!")
+                                            st.rerun()
+                        else:
+                            st.info("Nenhuma ferramenta vinculada a este cliente.")
                 else:
-                    st.info("Nenhuma ferramenta vinculada a esta máquina.")
+                    st.warning(f"Nenhuma licença encontrada contendo o termo: '{busca_cliente}'")
+            else:
+                st.info("👆 Digite o nome ou CNPJ do cliente acima para começar a editar.")
 
 # ==========================================
 # ABA 5: RELATÓRIO DE VENCIMENTOS (CRM)
